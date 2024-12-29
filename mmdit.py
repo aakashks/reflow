@@ -29,22 +29,14 @@ def modulate(x, shift, scale):
 
 class PatchEmbed(nn.Module):
     # temporarily flatten the whole image only
-    def __init__(self, input_dim=28*28, output_size=128, patch_size=28):
+    def __init__(self, input_dim=28*28, hidden_dim=128, patch_size=28, dtype=None, device=None):
         super().__init__()
-        self.l = nn.Linear(input_dim, output_size)
+        self.l = nn.Linear(input_dim, hidden_dim, dtype=dtype, device=device)
 
     def forward(self, x):
         return self.l(rearrange(x, 'b c h w -> b 1 (c h w)'))
 
 
-class UnPatchEmbed(nn.Module):
-    def __init__(self, input_dim=784, output_size=28*28, patch_size=28):
-        super().__init__()
-
-    def forward(self, x):
-        return rearrange(x, 'b c (h w) -> b c h w', h=28, w=28)
-    
-    
 
 # class LabelEmbedder(nn.Module):
 #     def __init__(self, input_dim=10, embedding_size=128):
@@ -56,13 +48,13 @@ class UnPatchEmbed(nn.Module):
 
 
 class VectorEmbedder(nn.Module):
-    def __init__(self, input_dim=10, hidden_size=128):
+    def __init__(self, input_dim=10, hidden_size=128, dtype=None, device=None):
         super().__init__()
         self.input_dim = input_dim
         self.mlp = nn.Sequential(
-            nn.Linear(input_dim, hidden_size),
+            nn.Linear(input_dim, hidden_size, dtype=dtype, device=device),
             nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size)
+            nn.Linear(hidden_size, hidden_size, dtype=dtype, device=device)
         )
     
     def forward(self, x):
@@ -72,12 +64,12 @@ class VectorEmbedder(nn.Module):
 class TimestepEmbedder(nn.Module):
     """Embeds scalar timesteps into vector representations."""
 
-    def __init__(self, hidden_size, frequency_embedding_size=256):
+    def __init__(self, hidden_size, frequency_embedding_size=256, dtype=None, device=None):
         super().__init__()
         self.mlp = nn.Sequential(
-            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
+            nn.Linear(frequency_embedding_size, hidden_size, bias=True, dtype=dtype, device=device),
             nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size, bias=True),
+            nn.Linear(hidden_size, hidden_size, bias=True, dtype=dtype, device=device),
         )
         self.frequency_embedding_size = frequency_embedding_size
 
@@ -114,17 +106,19 @@ class SelfAttention(nn.Module):
         num_heads: int = 8,
         qkv_bias: bool = False,
         pre_only: bool = False,
+        dtype=None,
+        device=None,
     ):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias, dtype=dtype, device=device)
         
-        self.ln_q = nn.LayerNorm(self.head_dim)
-        self.ln_k = nn.LayerNorm(self.head_dim)
+        self.ln_q = nn.LayerNorm(self.head_dim, dtype=dtype, device=device)
+        self.ln_k = nn.LayerNorm(self.head_dim, dtype=dtype, device=device)
         
-        self.proj = nn.Linear(dim, dim)
+        self.proj = nn.Linear(dim, dim, dtype=dtype, device=device)
         
     def pre_attention(self, x):
         # x is b n c
@@ -144,21 +138,21 @@ class SelfAttention(nn.Module):
     
     
 class DismantledBlock(nn.Module):
-    def __init__(self, hidden_size, num_heads=8, qkv_bias=False):
+    def __init__(self, hidden_size, num_heads=8, qkv_bias=False, dtype=None, device=None):
         super().__init__()
         self.num_heads = num_heads
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False)
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False)
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, dtype=dtype, device=device)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, dtype=dtype, device=device)
         
-        self.attn = SelfAttention(hidden_size, num_heads, qkv_bias)
+        self.attn = SelfAttention(hidden_size, num_heads, qkv_bias, dtype=dtype, device=device)
         mlp_hidden_dim = int(4 * hidden_size)
         self.mlp = nn.Sequential(
-            nn.Linear(hidden_size, mlp_hidden_dim),
+            nn.Linear(hidden_size, mlp_hidden_dim, dtype=dtype, device=device),
             nn.GELU(approximate='tanh'),
-            nn.Linear(mlp_hidden_dim, hidden_size)
+            nn.Linear(mlp_hidden_dim, hidden_size, dtype=dtype, device=device)
         )
         
-        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, hidden_size * 6))
+        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, hidden_size * 6, dtype=dtype, device=device))
         
     def pre_attention(self, x, c):  # this c is y in the figure
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
@@ -208,15 +202,15 @@ class JointBlock(nn.Module):
     
     
 class FinalLayer(nn.Module):
-    def __init__(self, hidden_size: int, patch_size: int, out_channels: int, total_out_channels: Optional[int] = None):
+    def __init__(self, hidden_size: int, patch_size: int, out_channels: int, total_out_channels: Optional[int] = None, dtype=None, device=None):
         super().__init__()
-        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6, dtype=dtype, device=device)
         self.linear = (
-            nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+            nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True, dtype=dtype, device=device)
             if (total_out_channels is None)
-            else nn.Linear(hidden_size, total_out_channels, bias=True)
+            else nn.Linear(hidden_size, total_out_channels, bias=True, dtype=dtype, device=device)
         )
-        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
+        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True, dtype=dtype, device=device))
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
@@ -228,28 +222,30 @@ class FinalLayer(nn.Module):
 class MMDiT(nn.Module):
     def __init__(
         self,
-        input_size=784,
-        hidden_size=32,
+        input_size=28*28,
+        hidden_size=64,
         num_classes=10,
-        depth=2,
-        num_heads=8,
+        depth=6,
+        num_heads=4,
         qkv_bias=False,
         patch_size=28,
         out_channels=1,
         total_out_channels=None,
+        dtype=None,
+        device=None,
     ):
         super().__init__()
 
-        self.x_embedder = PatchEmbed(input_size, hidden_size)
-        self.t_embedder = TimestepEmbedder(hidden_size)
-        self.y_embedder = VectorEmbedder(num_classes, hidden_size)        
-        self.context_embedder = VectorEmbedder(num_classes, hidden_size)
+        self.x_embedder = PatchEmbed(input_size, hidden_size, patch_size, dtype=dtype, device=device)
+        self.t_embedder = TimestepEmbedder(hidden_size, dtype=dtype, device=device)
+        self.y_embedder = VectorEmbedder(num_classes, hidden_size, dtype=dtype, device=device)        
+        self.context_embedder = VectorEmbedder(num_classes, hidden_size, dtype=dtype, device=device)
         
         self.joint_blocks = nn.ModuleList(
-            [JointBlock(hidden_size, num_heads, qkv_bias) for i in range(depth)]
+            [JointBlock(hidden_size, num_heads, qkv_bias, dtype=dtype, device=device) for i in range(depth)]
         )
-        self.final_layer = FinalLayer(hidden_size, patch_size, out_channels, total_out_channels)
-        self.unpatch = UnPatchEmbed(input_size, patch_size, out_channels)
+        self.final_layer = FinalLayer(hidden_size, patch_size, out_channels, total_out_channels, dtype=dtype, device=device)        
+        self.patch_size = patch_size
         
     def forward_core_with_concat(self, x, c_mod, context):
         # context is B, L', D
@@ -260,6 +256,10 @@ class MMDiT(nn.Module):
         x = self.final_layer(x, c_mod)  # (N, T, patch_size ** 2 * out_channels)
         return x
     
+    def unpatchify(self, x):
+        return rearrange(x, 'b c (h w) -> b c h w', h=self.patch_size, w=self.patch_size)
+
+    
     def forward(self, x, t, y, context):
         x = self.x_embedder(x)
         c = self.t_embedder(t)
@@ -268,6 +268,4 @@ class MMDiT(nn.Module):
         
         context = self.context_embedder(context)
         x = self.forward_core_with_concat(x, c, context)
-        x = self.unpatch(x)
-        return x
-    
+        return self.unpatchify(x)

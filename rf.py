@@ -19,15 +19,16 @@ transform = transforms.Compose([
 ])
 
 def train(
-    batch_size=32,
-    epochs=10,
+    batch_size=64,
+    epochs=20,
     lr=1e-4,
-    timesteps=20,
-    device='cpu',
+    timesteps=50,
+    device='cuda',
     save_model=True,
     log_wandb=False,
-    download=False,
-    save_dir='./models'
+    download=True,
+    save_dir='./models',
+    dtype=torch.float32
 ):
     print(locals())
 
@@ -35,7 +36,11 @@ def train(
     if log_wandb:
         wandb.init(project='reflow-mnist', config=locals())
 
-    # device = torch.device(device if torch.cuda.is_available() else 'cpu')
+    device = torch.device(
+        device if torch.cuda.is_available() else
+        'mps' if torch.backends.mps.is_available() else
+        'cpu'
+    )
 
     # Ensure the save directory exists
     if save_model:
@@ -53,12 +58,12 @@ def train(
         mnist_train,
         batch_size=batch_size,
         shuffle=True,
-        # num_workers=4,
-        # pin_memory=True
+        num_workers=4,
+        pin_memory=True
     )
 
     # Initialize the model and move it to the device
-    model = MMDiT()
+    model = MMDiT(dtype=dtype, device=device)
     model.train()
 
     # Initialize the optimizer
@@ -68,8 +73,8 @@ def train(
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}")
 
         for batch_idx, (x, y) in enumerate(progress_bar):
-            x = x.to(device)  # Shape: (batch_size, 1, 28, 28)
-            y = y.to(device)  # Shape: (batch_size,)
+            x = x.to(device, dtype)  # Shape: (batch_size, 1, 28, 28)
+            y = y.to(device, dtype)  # Shape: (batch_size,)
 
             # One-hot encode the labels
             y_onehot = F.one_hot(y, num_classes=10).float()
@@ -84,7 +89,7 @@ def train(
                 alpha = t / timesteps
                 xt = alpha * x + (1 - alpha) * x0  # Linear interpolation
 
-                t_tensor = torch.full((x.size(0),), t, dtype=torch.float, device=device, requires_grad=False)
+                t_tensor = torch.full((x.size(0),), t, dtype=dtype, device=device, requires_grad=False)
 
                 vt = model(xt, t_tensor, y_onehot, y_onehot.clone())
 
@@ -122,23 +127,29 @@ def train(
 
 @torch.no_grad()
 def sample_euler(
-    num_steps=10,
+    num_steps=50,
     save_samples=True,
     sample_dir='./samples',
     model_path=None,
-    device='cpu',
+    device='cuda',
     create_gifs=True,
-    gif_dir='./gifs'
+    gif_dir='./gifs',
+    dtype=torch.float32
 ):
 
-    device = torch.device(device if torch.cuda.is_available() else 'cpu')
+    device = torch.device(
+        device if torch.cuda.is_available() else
+        'mps' if torch.backends.mps.is_available() else
+        'cpu'
+    )
+    
     os.makedirs(sample_dir, exist_ok=True)
     if create_gifs:
         os.makedirs(gif_dir, exist_ok=True)
 
 
     # Initialize the model and load weights
-    model = MMDiT().to(device)
+    model = MMDiT(dtype=dtype, device=device)
     if model_path is None:
         raise ValueError("Please provide the path to the trained model checkpoint.")
     model.load_state_dict(torch.load(model_path, map_location=device))
@@ -146,15 +157,15 @@ def sample_euler(
 
     # Initialize a batch for all labels
     num_labels = 10  # MNIST has 10 classes
-    x = torch.randn(num_labels, 1, 28, 28, device=device)  # Shape: (10, 1, 28, 28)
+    x = torch.randn(num_labels, 1, 28, 28, dtype=dtype, device=device)  # Shape: (10, 1, 28, 28)
     labels = torch.arange(num_labels, device=device)  # Tensor([0,1,...,9])
-    y = F.one_hot(labels, num_classes=10).float()  # Shape: (10, 10)
+    y = F.one_hot(labels, num_classes=10).to(dtype)  # Shape: (10, 10)
 
     # List to store images at each timestep for GIF creation
     images_per_label = [[] for _ in range(num_labels)]  # List of lists
 
     for t in tqdm(range(1, num_steps + 1), desc='Sampling Steps'):
-        t_tensor = torch.full((num_labels,), t, dtype=torch.float, device=device)  # Shape: (10,)
+        t_tensor = torch.full((num_labels,), t, dtype=dtype, device=device)  # Shape: (10,)
 
         vt = model(x, t_tensor, y, y.clone())  # Shape: (10, 1, 28, 28)
         x = x + vt  # Euler integration step
