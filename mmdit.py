@@ -5,10 +5,18 @@ import math
 from einops import rearrange
 from typing import Optional
 
+from icecream import ic
+
 def attention(q, k, v, heads):
-    q, k, v = map(lambda x: rearrange(x, 'b n (h d) -> b h n d', h=heads), (q, k, v))
+    ic(q, k, v)
+    b, _, d = q.shape
+    dim_head = d // heads
+    q, k, v = map(lambda t: t.view(b, -1, heads, dim_head).transpose(1, 2), (q, k, v))   # b n (h d) -> b h n d
+    ic(q, k, v)
     out = F.scaled_dot_product_attention(q, k, v)
-    return rearrange(out, 'b h n d -> b n (h d)')
+    out = rearrange(out, 'b h n d -> b n (h d)')
+    ic(out)
+    return out
 
 def modulate(x, shift, scale):
     if shift is None:
@@ -30,7 +38,7 @@ class PatchEmbed(nn.Module):
         self.l = nn.Linear(input_dim, output_size)
 
     def forward(self, x):
-        return self.l(rearrange(x, 'b ... -> b (...)'))
+        return ic(self.l(rearrange(x, 'b c h w -> b 1 (c h w)')))
 
 
 # class LabelEmbedder(nn.Module):
@@ -45,6 +53,7 @@ class PatchEmbed(nn.Module):
 class VectorEmbedder(nn.Module):
     def __init__(self, input_dim=10, hidden_size=128):
         super().__init__()
+        self.input_dim = input_dim
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_size),
             nn.SiLU(),
@@ -52,7 +61,8 @@ class VectorEmbedder(nn.Module):
         )
     
     def forward(self, x):
-        return self.mlp(x)
+        ic(x)
+        return ic(self.mlp(x))
 
 
 class TimestepEmbedder(nn.Module):
@@ -85,11 +95,14 @@ class TimestepEmbedder(nn.Module):
     def forward(self, t, **kwargs):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         t_emb = self.mlp(t_freq)
-        return t_emb
+        return ic(t_emb)
 
 
-def split_qkv(qkv, heads):
-    qkv = rearrange(qkv, 'b n (x h d) -> x b n d h', h=heads, x=3)
+def split_qkv(qkv, head_dim):
+    ic(qkv)
+    ic(head_dim)
+    qkv = rearrange(qkv, 'b n (split head head_dim) -> split b n head head_dim', split=3, head_dim=head_dim)
+    ic(qkv)
     return qkv[0], qkv[1], qkv[2]
 
 
@@ -115,13 +128,13 @@ class SelfAttention(nn.Module):
     def pre_attention(self, x):
         # x is b n c
         qkv = self.qkv(x) # b n 3d
-        q, k, v = split_qkv(qkv, self.num_heads)
-        q = rearrange(self.ln_q(q), 'b n d h -> b n (d h)')
-        k = rearrange(self.ln_k(k), 'b n d h -> b n (d h)')
+        q, k, v = split_qkv(qkv, self.head_dim)
+        q = rearrange(self.ln_q(q), 'b n h d -> b n (h d)')
+        k = rearrange(self.ln_k(k), 'b n h d -> b n (h d)')
         return q, k, v
     
     def post_attention(self, x):
-        return self.proj(x)
+        return ic(self.proj(x))
     
     def forward(self, x):
         q, k, v = self.pre_attention(x)
@@ -147,14 +160,15 @@ class DismantledBlock(nn.Module):
         self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, hidden_size * 6))
         
     def pre_attention(self, x, c):  # this c is y in the figure
+        ic(x, c)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        qkv = self.attn.pre_attention(modulate(self.norm1(x), shift_msa, scale_msa))
+        qkv = ic(self.attn.pre_attention(modulate(self.norm1(x), shift_msa, scale_msa)))
         return qkv, (x, gate_msa, shift_mlp, scale_mlp, gate_mlp)
     
     def post_attention(self, attn, x, gate_msa, shift_mlp, scale_mlp, gate_mlp):
         x = x + gate_msa.unsqueeze(1) * self.attn.post_attention(attn)
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        return x
+        return ic(x)
     
     def forward(self, x, c):
         (q, k, v), intermediates = self.pre_attention(x, c)
@@ -164,8 +178,8 @@ class DismantledBlock(nn.Module):
 
 def block_mixing(context, x, context_block, x_block, c):
     assert context is not None, "block_mixing called with None context"
+    ic(context, x, c)
     context_qkv, context_intermediates = context_block.pre_attention(context, c)
-
     x_qkv, x_intermediates = x_block.pre_attention(x, c)
 
     o = []
@@ -206,10 +220,11 @@ class FinalLayer(nn.Module):
         self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        ic(x, c)
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
         x = modulate(self.norm_final(x), shift, scale)
         x = self.linear(x)
-        return x
+        return ic(x)
     
 
 class MMDiT(nn.Module):
@@ -226,8 +241,8 @@ class MMDiT(nn.Module):
         total_out_channels=None,
     ):
         super().__init__()
-                
-        self.x_embedder = PatchEmbed(input_shape=input_size, output_shape=hidden_size)
+
+        self.x_embedder = PatchEmbed(input_size, hidden_size)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = VectorEmbedder(num_classes, hidden_size)        
         self.context_embedder = VectorEmbedder(num_classes, hidden_size)
@@ -250,9 +265,9 @@ class MMDiT(nn.Module):
         x = self.x_embedder(x)
         c = self.t_embedder(t)
         y = self.y_embedder(y)
-        c = c + y
+        c = ic(c + y)
         
         context = self.context_embedder(context)
         x = self.forward_core_with_concat(x, c, context)
-        return x
+        return ic(x)
     
