@@ -5,17 +5,13 @@ import math
 from einops import rearrange
 from typing import Optional
 
-from icecream import ic
 
 def attention(q, k, v, heads):
-    ic(q, k, v)
     b, _, d = q.shape
     dim_head = d // heads
     q, k, v = map(lambda t: t.view(b, -1, heads, dim_head).transpose(1, 2), (q, k, v))   # b n (h d) -> b h n d
-    ic(q, k, v)
     out = F.scaled_dot_product_attention(q, k, v)
     out = rearrange(out, 'b h n d -> b n (h d)')
-    ic(out)
     return out
 
 def modulate(x, shift, scale):
@@ -33,13 +29,22 @@ def modulate(x, shift, scale):
 
 class PatchEmbed(nn.Module):
     # temporarily flatten the whole image only
-    def __init__(self, input_dim=28*28, output_size=128, patch_size=16):
+    def __init__(self, input_dim=28*28, output_size=128, patch_size=28):
         super().__init__()
         self.l = nn.Linear(input_dim, output_size)
 
     def forward(self, x):
-        return ic(self.l(rearrange(x, 'b c h w -> b 1 (c h w)')))
+        return self.l(rearrange(x, 'b c h w -> b 1 (c h w)'))
 
+
+class UnPatchEmbed(nn.Module):
+    def __init__(self, input_dim=784, output_size=28*28, patch_size=28):
+        super().__init__()
+
+    def forward(self, x):
+        return rearrange(x, 'b c (h w) -> b c h w', h=28, w=28)
+    
+    
 
 # class LabelEmbedder(nn.Module):
 #     def __init__(self, input_dim=10, embedding_size=128):
@@ -61,8 +66,7 @@ class VectorEmbedder(nn.Module):
         )
     
     def forward(self, x):
-        ic(x)
-        return ic(self.mlp(x))
+        return self.mlp(x)
 
 
 class TimestepEmbedder(nn.Module):
@@ -95,14 +99,11 @@ class TimestepEmbedder(nn.Module):
     def forward(self, t, **kwargs):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         t_emb = self.mlp(t_freq)
-        return ic(t_emb)
+        return t_emb
 
 
 def split_qkv(qkv, head_dim):
-    ic(qkv)
-    ic(head_dim)
     qkv = rearrange(qkv, 'b n (split head head_dim) -> split b n head head_dim', split=3, head_dim=head_dim)
-    ic(qkv)
     return qkv[0], qkv[1], qkv[2]
 
 
@@ -134,7 +135,7 @@ class SelfAttention(nn.Module):
         return q, k, v
     
     def post_attention(self, x):
-        return ic(self.proj(x))
+        return self.proj(x)
     
     def forward(self, x):
         q, k, v = self.pre_attention(x)
@@ -160,15 +161,14 @@ class DismantledBlock(nn.Module):
         self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, hidden_size * 6))
         
     def pre_attention(self, x, c):  # this c is y in the figure
-        ic(x, c)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        qkv = ic(self.attn.pre_attention(modulate(self.norm1(x), shift_msa, scale_msa)))
+        qkv = self.attn.pre_attention(modulate(self.norm1(x), shift_msa, scale_msa))
         return qkv, (x, gate_msa, shift_mlp, scale_mlp, gate_mlp)
     
     def post_attention(self, attn, x, gate_msa, shift_mlp, scale_mlp, gate_mlp):
         x = x + gate_msa.unsqueeze(1) * self.attn.post_attention(attn)
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        return ic(x)
+        return x
     
     def forward(self, x, c):
         (q, k, v), intermediates = self.pre_attention(x, c)
@@ -178,7 +178,6 @@ class DismantledBlock(nn.Module):
 
 def block_mixing(context, x, context_block, x_block, c):
     assert context is not None, "block_mixing called with None context"
-    ic(context, x, c)
     context_qkv, context_intermediates = context_block.pre_attention(context, c)
     x_qkv, x_intermediates = x_block.pre_attention(x, c)
 
@@ -220,11 +219,10 @@ class FinalLayer(nn.Module):
         self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        ic(x, c)
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
         x = modulate(self.norm_final(x), shift, scale)
         x = self.linear(x)
-        return ic(x)
+        return x
     
 
 class MMDiT(nn.Module):
@@ -236,7 +234,7 @@ class MMDiT(nn.Module):
         depth=2,
         num_heads=8,
         qkv_bias=False,
-        patch_size=16,
+        patch_size=28,
         out_channels=1,
         total_out_channels=None,
     ):
@@ -251,6 +249,7 @@ class MMDiT(nn.Module):
             [JointBlock(hidden_size, num_heads, qkv_bias) for i in range(depth)]
         )
         self.final_layer = FinalLayer(hidden_size, patch_size, out_channels, total_out_channels)
+        self.unpatch = UnPatchEmbed(input_size, patch_size, out_channels)
         
     def forward_core_with_concat(self, x, c_mod, context):
         # context is B, L', D
@@ -265,9 +264,10 @@ class MMDiT(nn.Module):
         x = self.x_embedder(x)
         c = self.t_embedder(t)
         y = self.y_embedder(y)
-        c = ic(c + y)
+        c = c + y
         
         context = self.context_embedder(context)
         x = self.forward_core_with_concat(x, c, context)
-        return ic(x)
+        x = self.unpatch(x)
+        return x
     
