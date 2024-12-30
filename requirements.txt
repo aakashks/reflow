@@ -1,0 +1,8 @@
+torch
+torchvision
+hydra-core
+wandb
+icecream
+fire
+tqdm
+matplotlib
