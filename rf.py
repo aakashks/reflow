@@ -20,8 +20,9 @@ class RF:
         z1 = torch.randn_like(x, device=x.device, requires_grad=False)
         
         for t in range(1, time_steps + 1):
-            
             t = t / time_steps
+            
+            # TODO: add cfg
             zt = x * t + z1 * (1 - t)
             
             t = torch.full((x.size(0),), t, device=x.device, requires_grad=False) / time_steps
@@ -42,6 +43,7 @@ class RF:
             t_tensor = torch.full((b,), t, device=x.device) / steps
 
             vt = self.model(x, t_tensor, y, y0)
+            # TODO: add cfg
             x = x + vt
 
             x_denorm = (x * 0.5) + 0.5
@@ -151,6 +153,7 @@ def sample(
     create_gifs=True,
     gif_dir='./gifs',
     num_labels=10,
+    **kwargs
 ):
 
     device = torch.device(device if torch.cuda.is_available() else 'cpu')
@@ -161,7 +164,7 @@ def sample(
 
 
     # Initialize the model and load weights
-    model = MMDiT().to(device)
+    model = MMDiT(**kwargs).to(device)
     if model_path is None:
         raise ValueError("Please provide the path to the trained model checkpoint.")
     

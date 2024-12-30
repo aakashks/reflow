@@ -22,7 +22,7 @@ class Trainer:
         optimizer,
         batch_size=64,
         epochs=50,
-        lr=5e-4,
+        lr=1e-3,
         timesteps=25,
         device='cuda',
         save_model=True,
@@ -218,7 +218,7 @@ def train_ddp(**kwargs):
     
     if world_size == 1 or not_ddp:
         print("Training in non-DDP mode")
-        model = MMDiT()
+        model = MMDiT(**kwargs)
         trainer = Trainer(
             model=model,
             optimizer=optim.Adam,
