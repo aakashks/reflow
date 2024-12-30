@@ -118,7 +118,7 @@ class Trainer:
             return
         
         checkpoint_path = os.path.join(self.artifact_dir, ckpt_name)
-        torch.save(model.module.state_dict(), checkpoint_path)
+        torch.save(model.module.state_dict() if dist.is_initialized() else model.state_dict(), checkpoint_path)
         print(f"Saved checkpoint: {checkpoint_path}")
         
     def _run_batch(self, x, y):
@@ -214,10 +214,13 @@ def run_ddp(rank, world_size, kwargs):
 
 
 def train_ddp(**kwargs):
-    not_ddp = kwargs.pop('not_ddp', False)
+    no_ddp = kwargs.pop('no_ddp', False)
     world_size = kwargs.pop('world_size', 2)
     
-    if world_size == 1 or not_ddp:
+    if not no_ddp and world_size > 1 and torch.cuda.device_count() > 1:
+        mp.spawn(run_ddp, args=(world_size, kwargs), nprocs=world_size)
+        
+    else:
         print("Training in non-DDP mode")
         model = MMDiT(**kwargs)
         trainer = Trainer(
@@ -226,9 +229,6 @@ def train_ddp(**kwargs):
             **kwargs
         )
         trainer.train()
-        return
-    
-    mp.spawn(run_ddp, args=(world_size, kwargs), nprocs=world_size)
 
 
 if __name__ == '__main__':
