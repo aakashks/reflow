@@ -40,26 +40,35 @@ class Trainer:
         self.save_model = save_model
         self.wandb_offline = wandb_offline
         self.dataset_fraction = dataset_fraction
+        self.project_name = project_name  # Store project_name
         
         from torch.optim.lr_scheduler import CosineAnnealingLR
         self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
 
         config = {'batch_size': batch_size, 'epochs': epochs, 'lr': lr, 'timesteps': timesteps, 'dataset_fraction': dataset_fraction}
-        print(f"Trainer init {config}")
-        self.rf = RF(model.to(device))
 
-        if not wandb.run:  
-            if not wandb_offline:
-                wandb.init(project=project_name, config=config)
-            else:
-                wandb.init(project=project_name, config=config, mode='offline')
-
+        self.rf = RF(model)
+        
+        self.config = config  # Store config for later wandb init
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         
-        self.artifact_dir = wandb.run.dir if wandb.run else './artifacts'
+        self.artifact_dir = './artifacts'  # Default artifact directory
         os.makedirs(self.artifact_dir, exist_ok=True)
 
         self.train_loader = None
+
+    def _init_wandb(self, rank=None):
+        if wandb.run is not None:
+            return
+
+        if rank is not None and rank != 0:
+            wandb.init(mode='disabled')
+        else:
+            mode = 'online' if not self.wandb_offline else 'offline'
+            print('Train init', self.config)
+            wandb.init(project=self.project_name, config=self.config, mode=mode)
+            self.artifact_dir = wandb.run.dir
+            os.makedirs(self.artifact_dir, exist_ok=True)
 
     def _get_dataloader(self, ddp=False, rank=0, world_size=1):
         transform = transforms.Compose([
@@ -139,13 +148,13 @@ class Trainer:
         self.model.to(self.device)
         self.model = DDP(self.model, device_ids=[rank], output_device=rank)
 
-        if rank != 0:
-            wandb.init(mode='disabled')
-        
-        if rank == 0 and wandb.run is not None:
-            self.artifact_dir = wandb.run.dir
+        self._init_wandb(rank)  # Initialize wandb with rank
 
     def train(self, ddp=False, rank=0, world_size=1):
+        if not ddp:
+            self._init_wandb()  # Initialize wandb for non-DDP training
+            self.rf.model.to(self.device)
+        
         if ddp:
             self.train_loader = self._get_dataloader(ddp=True, rank=rank, world_size=world_size)
         else:
