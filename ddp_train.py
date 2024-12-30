@@ -29,6 +29,7 @@ class Trainer:
         wandb_offline=False,
         dataset_fraction=0.2,
         project_name='reflow-mnist',
+        **kwargs
     ):
         self.model = model
         self.optimizer = optimizer(self.model.parameters(), lr=lr)
@@ -45,7 +46,7 @@ class Trainer:
         from torch.optim.lr_scheduler import CosineAnnealingLR
         self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
 
-        config = {'batch_size': batch_size, 'epochs': epochs, 'lr': lr, 'timesteps': timesteps, 'dataset_fraction': dataset_fraction}
+        config = {'batch_size': batch_size, 'epochs': epochs, 'lr': lr, 'timesteps': timesteps, 'dataset_fraction': dataset_fraction, **kwargs}
 
         self.rf = RF(model)
         
@@ -201,7 +202,7 @@ class Trainer:
 
 def run_ddp(rank, world_size, kwargs):
     # will be called multiple times in spawn
-    model = MMDiT()
+    model = MMDiT(**kwargs)
     trainer = Trainer(
         model=model,
         optimizer=optim.Adam,
