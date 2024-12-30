@@ -11,6 +11,49 @@ import fire
 
 from mmdit import MMDiT 
 
+class RF:
+    def __init__(self, model):
+        self.model = model
+        
+    def forward_pass(self, x, y, y0, time_steps):
+        loss = 0.0
+        z1 = torch.randn_like(x, device=x.device, requires_grad=False)
+        
+        for t in range(1, time_steps + 1):
+            
+            t = t / time_steps
+            zt = x * t + z1 * (1 - t)
+            
+            t = torch.full((x.size(0),), t, device=x.device, requires_grad=False) / time_steps
+            vt = self.model(zt, t, y, y0)
+            
+            loss += F.mse_loss(vt, (x - z1))
+            
+        return loss / time_steps
+    
+    
+    @torch.no_grad()
+    def simple_euler(self, x, y, y0, steps=25):
+        b = x.size(0)
+
+        images_per_label = [[] for _ in range(b)]
+
+        for t in tqdm(range(1, steps + 1), desc='Sampling Steps'):
+            t_tensor = torch.full((b,), t, device=x.device) / steps
+
+            vt = self.model(x, t_tensor, y, y.clone())
+            x = x + vt
+
+            x_denorm = (x * 0.5) + 0.5
+            x_denorm = torch.clamp(x_denorm, 0, 1)
+
+            for idx in range(b):
+                img = x_denorm[idx].cpu().squeeze(0).numpy()
+                img = (img * 255).astype('uint8')
+                images_per_label[idx].append(img)
+
+        return images_per_label
+
 
 def train(
     batch_size=64,
@@ -67,6 +110,8 @@ def train(
     # Initialize the model and move it to the device
     model = MMDiT().to(device)
     model.train()
+    
+    rf = RF(model)
 
     # Initialize the optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -75,31 +120,15 @@ def train(
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}")
 
         for batch_idx, (x, y) in enumerate(progress_bar):
-            x = x.to(device)  # Shape: (batch_size, 1, 28, 28)
-            y = y.to(device)  # Shape: (batch_size,)
+            x = x.to(device)  
+            y = y.to(device)  
 
             # One-hot encode the labels
             y_onehot = F.one_hot(y, num_classes=10).float()
-
-            # Sample x0 from a standard normal distribution
-            x0 = torch.randn_like(x).to(device)
-
             optimizer.zero_grad()
-            loss = 0.0
 
-            for t in range(1, timesteps + 1):
-                alpha = t / timesteps
-                xt = alpha * x + (1 - alpha) * x0  # Linear interpolation
-
-                t_tensor = torch.full((x.size(0),), t, device=device, requires_grad=False) / timesteps
-
-                vt = model(xt, t_tensor, y_onehot, y_onehot.clone())
-
-                target = (x - x0)  # Target for the velocity
-
-                loss += F.mse_loss(vt, target)
-
-            loss = loss / timesteps  # Average loss over timesteps
+            loss = rf.forward_pass(x, y_onehot, y_onehot.clone(), timesteps)
+            
             loss.backward()
             optimizer.step()
 
@@ -127,7 +156,7 @@ def train(
 
 
 @torch.no_grad()
-def sample_euler(
+def sample(
     num_steps=25,
     sample_dir='./samples',
     model_path=None,
@@ -153,31 +182,13 @@ def sample_euler(
     model.eval()
 
     # Initialize a batch for all labels
-    x = torch.randn(num_labels, 1, 28, 28, device=device)  # Shape: (10, 1, 28, 28)
-    labels = torch.arange(num_labels, device=device)  # Tensor([0,1,...,9])
-    y = F.one_hot(labels, num_classes=10).float()  # Shape: (10, 10)
+    x = torch.randn(num_labels, 1, 28, 28, device=device)
+    labels = torch.arange(num_labels, device=device)
+    y = F.one_hot(labels, num_classes=10).float()
 
-    # List to store images at each timestep for GIF creation
-    images_per_label = [[] for _ in range(num_labels)]  # List of lists
-
-    for t in tqdm(range(1, num_steps + 1), desc='Sampling Steps'):
-        t_tensor = torch.full((num_labels,), t, device=device) / num_steps  # Shape: (10,)
-
-        vt = model(x, t_tensor, y, y.clone())  # Shape: (10, 1, 28, 28)
-        x = x + vt  # Euler integration step
-
-        # Denormalize x to [0, 1] for saving
-        x_denorm = (x * 0.5) + 0.5  # Shape: (10, 1, 28, 28)
-        x_denorm = torch.clamp(x_denorm, 0, 1)
-
-        # Append images for GIFs
-        if create_gifs:
-            for idx in range(num_labels):
-                # Convert to CPU and NumPy for imageio
-                img = x_denorm[idx].cpu().squeeze(0).numpy()  # Shape: (28, 28)
-                img = (img * 255).astype('uint8')  # Convert to uint8
-                images_per_label[idx].append(img)
-
+    rf = RF(model)
+    
+    images_per_label = rf.simple_euler(x, y, y.clone(), steps=num_steps)
 
     # Save the final images
     for idx in range(num_labels):
@@ -198,5 +209,5 @@ def sample_euler(
 if __name__ == '__main__':
     fire.Fire({
         'train': train,
-        'sample': sample_euler
+        'sample': sample
     })
