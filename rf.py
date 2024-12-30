@@ -41,7 +41,7 @@ class RF:
         for t in tqdm(range(1, steps + 1), desc='Sampling Steps'):
             t_tensor = torch.full((b,), t, device=x.device) / steps
 
-            vt = self.model(x, t_tensor, y, y.clone())
+            vt = self.model(x, t_tensor, y, y0)
             x = x + vt
 
             x_denorm = (x * 0.5) + 0.5
@@ -62,7 +62,7 @@ def train(
     timesteps=25,
     device='cuda',
     save_model=True,
-    wandb_offline=True,
+    wandb_offline=False,
     dataset_fraction=0.2,
     download=True,
 ):
