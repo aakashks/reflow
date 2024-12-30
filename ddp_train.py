@@ -113,7 +113,7 @@ class Trainer:
             return
         
         checkpoint_path = os.path.join(self.artifact_dir, ckpt_name)
-        torch.save(model.state_dict(), checkpoint_path)
+        torch.save(model.module.state_dict(), checkpoint_path)
         print(f"Saved checkpoint: {checkpoint_path}")
         
     def _run_batch(self, x, y):
