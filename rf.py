@@ -22,7 +22,6 @@ def train(
     wandb_offline=True,
     dataset_fraction=0.4,
     download=True,
-    dtype='float32',
 ):
     print(locals())
 
@@ -37,11 +36,10 @@ def train(
     artifact_dir = wandb.run.dir if wandb.run else './artifacts'
     os.makedirs(artifact_dir, exist_ok=True)
     
-    torch_dtype = getattr(torch, dtype)
     
     transform = transforms.Compose([
         transforms.PILToTensor(),
-        transforms.ConvertImageDtype(torch_dtype),
+        transforms.ConvertImageDtype(torch.float32),
         transforms.Normalize((0.5,), (0.5,)),
     ])
 
@@ -67,7 +65,7 @@ def train(
     )
 
     # Initialize the model and move it to the device
-    model = MMDiT(dtype=torch_dtype, device=device).to(device)
+    model = MMDiT().to(device)
     model.train()
 
     # Initialize the optimizer
@@ -77,11 +75,11 @@ def train(
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}")
 
         for batch_idx, (x, y) in enumerate(progress_bar):
-            x = x.to(device, dtype=torch_dtype)  # Shape: (batch_size, 1, 28, 28)
+            x = x.to(device)  # Shape: (batch_size, 1, 28, 28)
             y = y.to(device)  # Shape: (batch_size,)
 
             # One-hot encode the labels
-            y_onehot = F.one_hot(y, num_classes=10).to(torch_dtype)
+            y_onehot = F.one_hot(y, num_classes=10).float()
 
             # Sample x0 from a standard normal distribution
             x0 = torch.randn_like(x).to(device)
@@ -93,7 +91,7 @@ def train(
                 alpha = t / timesteps
                 xt = alpha * x + (1 - alpha) * x0  # Linear interpolation
 
-                t_tensor = torch.full((x.size(0),), t, dtype=torch_dtype, device=device, requires_grad=False) / timesteps
+                t_tensor = torch.full((x.size(0),), t, device=device, requires_grad=False) / timesteps
 
                 vt = model(xt, t_tensor, y_onehot, y_onehot.clone())
 
@@ -137,7 +135,6 @@ def sample_euler(
     create_gifs=True,
     gif_dir='./gifs',
     num_labels=10,
-    dtype=torch.float32
 ):
 
     device = torch.device(device if torch.cuda.is_available() else 'cpu')
@@ -148,7 +145,7 @@ def sample_euler(
 
 
     # Initialize the model and load weights
-    model = MMDiT(dtype=dtype, device=device).to(device)
+    model = MMDiT().to(device)
     if model_path is None:
         raise ValueError("Please provide the path to the trained model checkpoint.")
     
@@ -156,15 +153,15 @@ def sample_euler(
     model.eval()
 
     # Initialize a batch for all labels
-    x = torch.randn(num_labels, 1, 28, 28, dtype=dtype, device=device)  # Shape: (10, 1, 28, 28)
+    x = torch.randn(num_labels, 1, 28, 28, device=device)  # Shape: (10, 1, 28, 28)
     labels = torch.arange(num_labels, device=device)  # Tensor([0,1,...,9])
-    y = F.one_hot(labels, num_classes=10).to(dtype)  # Shape: (10, 10)
+    y = F.one_hot(labels, num_classes=10).float()  # Shape: (10, 10)
 
     # List to store images at each timestep for GIF creation
     images_per_label = [[] for _ in range(num_labels)]  # List of lists
 
     for t in tqdm(range(1, num_steps + 1), desc='Sampling Steps'):
-        t_tensor = torch.full((num_labels,), t, dtype=dtype, device=device) / num_steps  # Shape: (10,)
+        t_tensor = torch.full((num_labels,), t, device=device) / num_steps  # Shape: (10,)
 
         vt = model(x, t_tensor, y, y.clone())  # Shape: (10, 1, 28, 28)
         x = x + vt  # Euler integration step
