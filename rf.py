@@ -63,7 +63,7 @@ def train(
     device='cuda',
     save_model=True,
     wandb_offline=True,
-    dataset_fraction=0.4,
+    dataset_fraction=0.2,
     download=True,
 ):
     print(locals())
@@ -79,7 +79,6 @@ def train(
     artifact_dir = wandb.run.dir if wandb.run else './artifacts'
     os.makedirs(artifact_dir, exist_ok=True)
     
-    
     transform = transforms.Compose([
         transforms.PILToTensor(),
         transforms.ConvertImageDtype(torch.float32),
@@ -87,25 +86,14 @@ def train(
     ])
 
     # Load the MNIST dataset
-    mnist_dataset = datasets.MNIST(
-        root='./datasets',
-        train=True,
-        transform=transform,
-        download=download
-    )
+    dataset = datasets.MNIST(root='./datasets', train=True, transform=transform, download=download)
 
     if dataset_fraction < 1.0:
-        subset_len = int(len(mnist_dataset) * dataset_fraction)
-        mnist_dataset = torch.utils.data.Subset(mnist_dataset, range(subset_len))
+        subset_len = int(len(dataset) * dataset_fraction)
+        dataset = torch.utils.data.Subset(dataset, range(subset_len))
 
 
-    train_loader = DataLoader(
-        mnist_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True
-    )
+    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
 
     # Initialize the model and move it to the device
     model = MMDiT().to(device)
@@ -113,7 +101,6 @@ def train(
     
     rf = RF(model)
 
-    # Initialize the optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     for epoch in tqdm(range(1, epochs + 1), desc='Epochs'):
