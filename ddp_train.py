@@ -71,6 +71,9 @@ class Trainer:
             os.makedirs(self.artifact_dir, exist_ok=True)
 
     def _get_dataloader(self, ddp=False, rank=0, world_size=1):
+        # MNIST
+        # note that transform are only applied when __getitem__ is called (ie by the dataloader) 
+        # not when you check the data using dataset.data
         transform = transforms.Compose([
             transforms.PILToTensor(),
             transforms.ConvertImageDtype(torch.float32),
@@ -88,7 +91,7 @@ class Trainer:
                 dataset,
                 num_replicas=world_size,
                 rank=rank,
-                shuffle=True
+                shuffle=True        # ddp sampler shuffles no need to do it in dataloader
             )
             train_loader = DataLoader(
                 dataset,
@@ -109,6 +112,7 @@ class Trainer:
         return train_loader
     
     def _save_checkpoint(self, model, ckpt_name='model_final.pth'):
+        # only on rank 0 process do these things
         if dist.is_initialized() and dist.get_rank() != 0:
             return
         
@@ -148,11 +152,12 @@ class Trainer:
         self.model.to(self.device)
         self.model = DDP(self.model, device_ids=[rank], output_device=rank)
 
-        self._init_wandb(rank)  # Initialize wandb with rank
+        self._init_wandb(rank)  # Initialize wandb with rank to reduce redundant inits
 
     def train(self, ddp=False, rank=0, world_size=1):
         if not ddp:
             self._init_wandb()  # Initialize wandb for non-DDP training
+            # since no where else model is being moved for non-DDP case
             self.rf.model.to(self.device)
         
         if ddp:
@@ -164,14 +169,18 @@ class Trainer:
         
         for epoch in tqdm(range(1, self.epochs + 1), desc='Epochs', disable=(ddp and rank != 0)):
             if ddp:
+                # need to do for ddp
                 self.train_loader.sampler.set_epoch(epoch)
 
             progress_bar = tqdm(self.train_loader, desc=f"Epoch {epoch}/{self.epochs}", leave=False, disable=(ddp and rank != 0))
             for batch_idx, (x, y) in enumerate(progress_bar):
                 loss = self._run_batch(x, y)
                 
-                progress_bar.set_postfix({'loss': loss})
+                progress_bar.set_postfix({'loss': loss})    # tqdm 
 
+                # only log on rank 0 process. however, only rank 0 loss will be logged
+                # to help fix this one can use dist.all_reduce to get the average loss
+                # TODO: dist.all_reduce
                 if (not dist.is_initialized()) or (dist.get_rank() == 0):
                     wandb.log({
                         'loss': loss,
@@ -191,6 +200,7 @@ class Trainer:
 
 
 def run_ddp(rank, world_size, kwargs):
+    # will be called multiple times in spawn
     model = MMDiT()
     trainer = Trainer(
         model=model,
