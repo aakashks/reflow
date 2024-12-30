@@ -1,3 +1,5 @@
+# MM-DiT model implementation largely based on https://github.com/Stability-AI/sd3.5/blob/main/mmditx.py
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,34 +22,22 @@ def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
-# class PatchEmbed(nn.Module):
-#     def __init__(self, in_channels=1, input_dim=28*28, hidden_dim=128, patch_size=4):
-#         super().__init__()
-#         self.conv = nn.Conv2d(in_channels, hidden_dim, kernel_size=patch_size, stride=patch_size)
-
-#     def forward(self, x):
-#         out = self.conv(x)
-#         return rearrange(out, 'b c h w -> b c (h w)')
-
-
-class PatchEmbed(nn.Module):
-    # temporarily flatten the whole image only
-    def __init__(self, input_dim=28*28, hidden_dim=128, patch_size=28):
+class PatchEmbedder(nn.Module):
+    def __init__(self, in_channels=1, hidden_dim=128, patch_size=4, max_seq_length=64):
         super().__init__()
-        self.l = nn.Linear(input_dim, hidden_dim)
+        self.conv = nn.Conv2d(in_channels, hidden_dim, kernel_size=patch_size, stride=patch_size)
+        self.patch_size = patch_size
+        
+        # learned positional embeddings
+        self.pos_embedding = nn.Parameter(torch.zeros(1, max_seq_length, hidden_dim))
+        nn.init.normal_(self.pos_embedding, std=0.02)
 
     def forward(self, x):
-        return self.l(rearrange(x, 'b c h w -> b 1 (c h w)'))
-
-
-
-# class LabelEmbedder(nn.Module):
-#     def __init__(self, input_dim=10, embedding_size=128):
-#         super().__init__()
-#         self.embed = nn.Embedding(input_dim, embedding_size)
-    
-#     def forward(self, x):
-#         return self.embed(x)
+        out = self.conv(x)
+        out = rearrange(out, 'b c h w -> b (h w) c')
+        seq_length = out.size(1)
+        pos_emb = self.pos_embedding[:, :seq_length, :]
+        return out + pos_emb
 
 
 class VectorEmbedder(nn.Module):
@@ -223,19 +213,19 @@ class FinalLayer(nn.Module):
 class MMDiT(nn.Module):
     def __init__(
         self,
-        input_size=28*28,
+        input_size=[28, 28],
         hidden_size=64,
         num_classes=10,
         depth=6,
         num_heads=4,
         qkv_bias=False,
-        patch_size=28,
+        patch_size=4,
+        in_channels=1,
         out_channels=1,
         total_out_channels=None,
     ):
         super().__init__()
-
-        self.x_embedder = PatchEmbed(input_size, hidden_size, patch_size)
+        self.x_embedder = PatchEmbedder(in_channels, hidden_size, patch_size)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = VectorEmbedder(num_classes, hidden_size)        
         self.context_embedder = VectorEmbedder(num_classes, hidden_size)
@@ -256,10 +246,17 @@ class MMDiT(nn.Module):
         return x
     
     def unpatchify(self, x):
-        return rearrange(x, 'b c (h w) -> b c h w', h=self.patch_size, w=self.patch_size)
+        n = int(x.size(1) ** 0.5)
+        return rearrange(x, 'b (n1 n2) (c h w) -> b c (n1 h) (n2 w)', n1=n, h=self.patch_size, w=self.patch_size)
 
     
     def forward(self, x, t, y, context):
+        """
+        Forward pass of DiT.
+        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
+        t: (N,) tensor of diffusion timesteps
+        y: (N,) tensor of class labels
+        """
         x = self.x_embedder(x)
         c = self.t_embedder(t)
         y = self.y_embedder(y)
