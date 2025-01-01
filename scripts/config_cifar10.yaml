@@ -1,22 +1,32 @@
 program: ddp_train.py
-name: mnist1
-project: reflow-mnist
+name: cifar1
+project: reflow-cifar10
 method: grid
 parameters:
   lr:
     value: 0.001
   batch_size:
-    values: [120, 110, 100]
+    value: 100
   timesteps:
-    value: 25
+    value: 30
   patch_size:
-    value: 28
+    value: 32
   dataset_fraction:
     value: 0.2
   depth:
     value: 8
+  num_heads:
+    value: 8
+  hidden_dim:
+    value: 64
   epochs:
     value: 50
+  dataset:
+    value: cifar10
+  num_channels:
+    value: 3
+  input_size:
+    value: 32
   ddp:
     value: true
 

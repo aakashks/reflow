@@ -1,0 +1,1 @@
+python rf.py sample --depth 8 --dataset cifar10 --input_size 32 --lr 0.001 --num_channels 3 --num_heads 8 --patch_size 32 --model_path models/sample.pth

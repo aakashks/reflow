@@ -41,7 +41,7 @@ class PatchEmbedder(nn.Module):
         x: (N, C, H, W)
         returns: (N, L, D) where L is no of patches and D is embedding dimension
         """
-        x = rearrange(x, 'b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size)
+        x = rearrange(x, 'b c (h p1) (w p2) -> b (h w) (c p1 p2)', p1=self.patch_size, p2=self.patch_size)
         x = self.linear(x) + self.pos_embedding
         return x
 
@@ -218,20 +218,19 @@ class MMDiT(nn.Module):
     def __init__(
         self,
         input_size=28,
-        output_size=28,
         hidden_size: int = 64,
         num_classes=10,
         depth: int = 6,
         num_heads: int = 4,
         qkv_bias: bool = False,
         patch_size=4,
-        channels=1,
+        num_channels=1,
         **kwargs
     ):
         super().__init__()
-        self.channels = channels
+        self.num_channels = num_channels
         self.patch_size = patch_size
-        self.x_embedder = PatchEmbedder(channels, input_size, hidden_size, patch_size)
+        self.x_embedder = PatchEmbedder(num_channels, input_size, hidden_size, patch_size)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = VectorEmbedder(num_classes, hidden_size)        
         self.context_embedder = VectorEmbedder(num_classes, hidden_size)
@@ -239,7 +238,7 @@ class MMDiT(nn.Module):
         self.joint_blocks = nn.ModuleList(
             [JointBlock(hidden_size, num_heads, qkv_bias) for i in range(depth)]
         )
-        self.final_layer = FinalLayer(hidden_size, patch_size, channels)
+        self.final_layer = FinalLayer(hidden_size, patch_size, num_channels)
         logger.info(f"Initialized MMDiT with {self.get_num_params()} parameters")
         
     def forward_core_with_concat(self, x, c_mod, context):
@@ -257,7 +256,7 @@ class MMDiT(nn.Module):
     def unpatchify(self, x):
         b, n, hw = x.shape
         n = int(math.sqrt(n))
-        out = rearrange(x, 'b (n1 n2) (c h w) -> b c (n1 h) (n2 w)', n1=n, n2=n, c=self.channels, h=self.patch_size)
+        out = rearrange(x, 'b (n1 n2) (c h w) -> b c (n1 h) (n2 w)', n1=n, n2=n, c=self.num_channels, h=self.patch_size)
         return out
 
     

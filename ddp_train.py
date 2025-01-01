@@ -29,7 +29,8 @@ class Trainer:
         save_model=True,
         wandb_offline=False,
         dataset_fraction=0.2,
-        project_name='reflow-mnist',
+        project_name='reflow',
+        dataset='mnist',
         **kwargs
     ):
         self.model = model
@@ -42,7 +43,8 @@ class Trainer:
         self.save_model = save_model
         self.wandb_offline = wandb_offline
         self.dataset_fraction = dataset_fraction
-        self.project_name = project_name  # Store project_name
+        self.project_name = f'{project_name}-{dataset}'
+        self.dataset = dataset
         
         from torch.optim.lr_scheduler import CosineAnnealingLR
         self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
@@ -73,17 +75,26 @@ class Trainer:
             os.makedirs(self.artifact_dir, exist_ok=True)
 
     def _get_dataloader(self, ddp=False, rank=0, world_size=1):
-        # MNIST
-        # note that transform are only applied when __getitem__ is called (ie by the dataloader) 
-        # not when you check the data using dataset.data
-        transform = transforms.Compose([
-            transforms.PILToTensor(),
-            transforms.ConvertImageDtype(torch.float32),
-            transforms.Normalize((0.5,), (0.5,)),
-        ])
+        if self.dataset == 'mnist':
+            transform = transforms.Compose([
+                transforms.PILToTensor(),
+                transforms.ConvertImageDtype(torch.float32),
+                transforms.Normalize((0.5,), (0.5,)),
+            ])
+            dataset = datasets.MNIST
+        elif self.dataset == 'cifar10':
+            transform = transforms.Compose([
+                transforms.PILToTensor(),
+                transforms.RandomCrop(32),
+                transforms.RandomHorizontalFlip(),
+                transforms.ConvertImageDtype(torch.float32),
+                transforms.Normalize((0.5,), (0.5,)),
+            ])
+            dataset = datasets.CIFAR10
+        else:
+            raise ValueError(f"Unsupported dataset: {self.dataset}")
 
-        dataset = datasets.MNIST(root='./datasets', train=True, transform=transform, download=True)
-
+        dataset = dataset(root='./cifar', train=True, transform=transform, download=True)
         if self.dataset_fraction < 1.0:
             subset_len = int(len(dataset) * self.dataset_fraction)
             dataset = torch.utils.data.Subset(dataset, range(subset_len))
@@ -141,6 +152,20 @@ class Trainer:
 
         if not dist.is_initialized() or dist.get_rank() == 0:
             wandb.finish()
+            
+    def _pre_training(self, ddp, rank, world_size):
+        if not ddp:
+            self._init_wandb()  # Initialize wandb for non-DDP training
+            # since no where else model is being moved for non-DDP case
+            self.rf.model.to(self.device)
+        
+        if ddp:
+            self.train_loader = self._get_dataloader(ddp=True, rank=rank, world_size=world_size)
+        else:
+            self.train_loader = self._get_dataloader(ddp=False)
+
+        self.model.train()
+        self.rf.model.to(self.device)
     
     def ddp_setup(self, rank, world_size):
         os.environ['MASTER_ADDR'] = 'localhost'
@@ -157,17 +182,7 @@ class Trainer:
         self._init_wandb(rank)  # Initialize wandb with rank to reduce redundant inits
 
     def train(self, ddp=False, rank=0, world_size=1):
-        if not ddp:
-            self._init_wandb()  # Initialize wandb for non-DDP training
-            # since no where else model is being moved for non-DDP case
-            self.rf.model.to(self.device)
-        
-        if ddp:
-            self.train_loader = self._get_dataloader(ddp=True, rank=rank, world_size=world_size)
-        else:
-            self.train_loader = self._get_dataloader(ddp=False)
-
-        self.model.train()
+        self._pre_training(ddp, rank, world_size)
         
         for epoch in tqdm(range(1, self.epochs + 1), desc='Epochs', disable=(ddp and rank != 0)):
             if ddp:
@@ -206,7 +221,7 @@ def run_ddp(rank, world_size, kwargs):
     model = MMDiT(**kwargs)
     trainer = Trainer(
         model=model,
-        optimizer=optim.Adam,
+        optimizer=optim.AdamW,
         **kwargs
     )
     trainer.ddp_setup(rank, world_size)

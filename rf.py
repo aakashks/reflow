@@ -50,8 +50,12 @@ class RF:
             x_denorm = torch.clamp(x_denorm, 0, 1)
 
             for idx in range(b):
-                img = x_denorm[idx].cpu().squeeze(0).numpy()
+                img = x_denorm[idx].cpu().numpy()
                 img = (img * 255).astype('uint8')
+                if img.shape[0] == 1:
+                    img = img[0]
+                else:
+                    img = img.transpose(1, 2, 0)
                 images_per_label[idx].append(img)
 
         return images_per_label
@@ -154,6 +158,8 @@ def sample(
     create_gifs=True,
     gif_dir='./gifs',
     num_labels=10,
+    num_channels=1,
+    input_size=28,
     **kwargs
 ):
 
@@ -165,7 +171,7 @@ def sample(
 
 
     # Initialize the model and load weights
-    model = MMDiT(**kwargs).to(device)
+    model = MMDiT(num_channels=num_channels, input_size=input_size, **kwargs).to(device)
     if model_path is None:
         raise ValueError("Please provide the path to the trained model checkpoint.")
     
@@ -173,7 +179,7 @@ def sample(
     model.eval()
 
     # Initialize a batch for all labels
-    x = torch.randn(num_labels, 1, 28, 28, device=device)
+    x = torch.randn(num_labels, num_channels, input_size, input_size, device=device)
     labels = torch.arange(num_labels, device=device)
     y = F.one_hot(labels, num_classes=10).float()
 
