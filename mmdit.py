@@ -6,7 +6,9 @@ import torch.nn.functional as F
 import math
 from einops import rearrange
 from typing import Optional
+from dataclasses import dataclass
 
+from loguru import logger
 
 def attention(q, k, v, heads):
     b, _, d = q.shape
@@ -23,21 +25,25 @@ def modulate(x, shift, scale):
 
 
 class PatchEmbedder(nn.Module):
-    def __init__(self, in_channels=1, hidden_dim=128, patch_size=4, max_seq_length=64):
+    def __init__(self, in_channels, image_size, embed_dim, patch_size):
         super().__init__()
-        self.conv = nn.Conv2d(in_channels, hidden_dim, kernel_size=patch_size, stride=patch_size)
+        num_patches = image_size // patch_size
         self.patch_size = patch_size
-        
-        # learned positional embeddings
-        self.pos_embedding = nn.Parameter(torch.zeros(1, max_seq_length, hidden_dim))
-        nn.init.normal_(self.pos_embedding, std=0.02)
+        self.linear = nn.Linear(in_channels * patch_size * patch_size, embed_dim)
+        # learnable position embedding
+        self.register_buffer(
+            "pos_embedding",
+            nn.Parameter(torch.randn(1, num_patches * num_patches, embed_dim)),
+        )
 
     def forward(self, x):
-        out = self.conv(x)
-        out = rearrange(out, 'b c h w -> b (h w) c')
-        seq_length = out.size(1)
-        pos_emb = self.pos_embedding[:, :seq_length, :]
-        return out + pos_emb
+        """
+        x: (N, C, H, W)
+        returns: (N, L, D) where L is no of patches and D is embedding dimension
+        """
+        x = rearrange(x, 'b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=self.patch_size, p2=self.patch_size)
+        x = self.linear(x) + self.pos_embedding
+        return x
 
 
 class VectorEmbedder(nn.Module):
@@ -193,13 +199,11 @@ class JointBlock(nn.Module):
     
     
 class FinalLayer(nn.Module):
-    def __init__(self, hidden_size: int, patch_size: int, out_channels: int, total_out_channels: Optional[int] = None):
+    def __init__(self, hidden_size: int, patch_size: int, out_channels: int):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = (
             nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
-            if (total_out_channels is None)
-            else nn.Linear(hidden_size, total_out_channels, bias=True)
         )
         self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
 
@@ -213,20 +217,21 @@ class FinalLayer(nn.Module):
 class MMDiT(nn.Module):
     def __init__(
         self,
-        input_size=[28, 28],
-        hidden_size=64,
+        input_size=28,
+        output_size=28,
+        hidden_size: int = 64,
         num_classes=10,
-        depth=6,
-        num_heads=4,
-        qkv_bias=False,
+        depth: int = 6,
+        num_heads: int = 4,
+        qkv_bias: bool = False,
         patch_size=4,
-        in_channels=1,
-        out_channels=1,
-        total_out_channels=None,
+        channels=1,
         **kwargs
     ):
         super().__init__()
-        self.x_embedder = PatchEmbedder(in_channels, hidden_size, patch_size)
+        self.channels = channels
+        self.patch_size = patch_size
+        self.x_embedder = PatchEmbedder(channels, input_size, hidden_size, patch_size)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = VectorEmbedder(num_classes, hidden_size)        
         self.context_embedder = VectorEmbedder(num_classes, hidden_size)
@@ -234,8 +239,8 @@ class MMDiT(nn.Module):
         self.joint_blocks = nn.ModuleList(
             [JointBlock(hidden_size, num_heads, qkv_bias) for i in range(depth)]
         )
-        self.final_layer = FinalLayer(hidden_size, patch_size, out_channels, total_out_channels)        
-        self.patch_size = patch_size
+        self.final_layer = FinalLayer(hidden_size, patch_size, channels)
+        logger.info(f"Initialized MMDiT with {self.get_num_params()} parameters")
         
     def forward_core_with_concat(self, x, c_mod, context):
         # context is B, L', D
@@ -245,10 +250,15 @@ class MMDiT(nn.Module):
 
         x = self.final_layer(x, c_mod)  # (N, T, patch_size ** 2 * out_channels)
         return x
+
+    def get_num_params(self):
+        return sum(p.numel() for p in self.parameters())
     
     def unpatchify(self, x):
-        n = int(x.size(1) ** 0.5)
-        return rearrange(x, 'b (n1 n2) (c h w) -> b c (n1 h) (n2 w)', n1=n, h=self.patch_size, w=self.patch_size)
+        b, n, hw = x.shape
+        n = int(math.sqrt(n))
+        out = rearrange(x, 'b (n1 n2) (c h w) -> b c (n1 h) (n2 w)', n1=n, n2=n, c=self.channels, h=self.patch_size)
+        return out
 
     
     def forward(self, x, t, y, context):
