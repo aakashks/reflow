@@ -1,0 +1,26 @@
+program: ddp_train.py
+name: mnist1
+project: reflow-mnist
+method: grid
+parameters:
+  lr:
+    value: 0.001
+  batch_size:
+    values: [120, 110, 100]
+  timesteps:
+    value: 25
+  patch_size:
+    value: 28
+  dataset_fraction:
+    value: 0.2
+  depth:
+    value: 8
+  epochs:
+    value: 50
+  ddp:
+    value: true
+
+command:
+  - ${interpreter}
+  - ${program}
+  - ${args}

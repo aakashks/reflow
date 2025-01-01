@@ -67,6 +67,7 @@ def train(
     wandb_offline=False,
     dataset_fraction=0.2,
     download=True,
+    **kwargs
 ):
     print(locals())
 
@@ -98,7 +99,7 @@ def train(
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
 
     # Initialize the model and move it to the device
-    model = MMDiT().to(device)
+    model = MMDiT(**kwargs).to(device)
     model.train()
     
     rf = RF(model)

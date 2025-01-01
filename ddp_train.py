@@ -11,6 +11,7 @@ from torchvision import datasets, transforms
 from tqdm.auto import tqdm
 import wandb
 import fire
+from loguru import logger
 
 from mmdit import MMDiT 
 from rf import RF
@@ -66,7 +67,7 @@ class Trainer:
             wandb.init(mode='disabled')
         else:
             mode = 'online' if not self.wandb_offline else 'offline'
-            print('Train init', self.config)
+            logger.info('Train init', self.config)
             wandb.init(project=self.project_name, config=self.config, mode=mode)
             self.artifact_dir = wandb.run.dir
             os.makedirs(self.artifact_dir, exist_ok=True)
@@ -119,7 +120,7 @@ class Trainer:
         
         checkpoint_path = os.path.join(self.artifact_dir, ckpt_name)
         torch.save(model.module.state_dict() if dist.is_initialized() else model.state_dict(), checkpoint_path)
-        print(f"Saved checkpoint: {checkpoint_path}")
+        logger.info(f"Saved checkpoint: {checkpoint_path}")
         
     def _run_batch(self, x, y):
         x = x.to(self.device)  
@@ -197,7 +198,7 @@ class Trainer:
         self._post_training()
         
         if rank == 0 or not ddp:
-            print("Training complete!")
+            logger.info("Training complete!")
 
 
 def run_ddp(rank, world_size, kwargs):
@@ -213,15 +214,10 @@ def run_ddp(rank, world_size, kwargs):
     dist.destroy_process_group()
 
 
-def train_ddp(**kwargs):
-    no_ddp = kwargs.pop('no_ddp', False)
-    world_size = kwargs.pop('world_size', 2)
-    
-    if not no_ddp and world_size > 1 and torch.cuda.device_count() > 1:
-        mp.spawn(run_ddp, args=(world_size, kwargs), nprocs=world_size)
-        
-    else:
-        print("Training in non-DDP mode")
+def train(ddp: bool = False, world_size: int = 2, **kwargs):
+    # no ddp even if device is 'cuda:0'
+    if not ddp or not torch.cuda.is_available() or torch.cuda.device_count() < 2 or world_size < 2 or kwargs.get('device', 'cuda') != 'cuda':
+        logger.info("Training in non-DDP mode")
         model = MMDiT(**kwargs)
         trainer = Trainer(
             model=model,
@@ -229,7 +225,9 @@ def train_ddp(**kwargs):
             **kwargs
         )
         trainer.train()
+    else:
+        mp.spawn(run_ddp, args=(world_size, kwargs), nprocs=world_size)
 
 
 if __name__ == '__main__':
-    fire.Fire(train_ddp)
+    fire.Fire(train)
