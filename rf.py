@@ -18,15 +18,16 @@ class RF:
     def forward_pass(self, x, y, y0, time_steps):
         loss = 0.0
         z1 = torch.randn_like(x, device=x.device, requires_grad=False)
-        
+        t_all = torch.rand(time_steps, x.size(0), device=x.device, requires_grad=False)    
+        # make it suitable for broadcasting
+        t_all = t_all.view(time_steps, x.size(0), 1, 1, 1)
+
+        zt = x * t_all + z1 * (1 - t_all)
+
         for t in range(1, time_steps + 1):
-            t = t / time_steps
-            
             # TODO: add cfg
-            zt = x * t + z1 * (1 - t)
-            
-            t = torch.full((x.size(0),), t, device=x.device, requires_grad=False) / time_steps
-            vt = self.model(zt, t, y, y0)
+            t_all_ = t_all[t-1].squeeze()
+            vt = self.model(zt[t-1], t_all_, y, y0)
             
             loss += F.mse_loss(vt, (x - z1))
             

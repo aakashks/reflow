@@ -94,7 +94,7 @@ class Trainer:
         else:
             raise ValueError(f"Unsupported dataset: {self.dataset}")
 
-        dataset = dataset(root='./cifar', train=True, transform=transform, download=True)
+        dataset = dataset(root='./datasets', train=True, transform=transform, download=True)
         if self.dataset_fraction < 1.0:
             subset_len = int(len(dataset) * self.dataset_fraction)
             dataset = torch.utils.data.Subset(dataset, range(subset_len))
