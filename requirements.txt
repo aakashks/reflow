@@ -6,3 +6,4 @@ fire
 tqdm
 matplotlib
 loguru
+omegaconf

@@ -8,6 +8,8 @@ from tqdm.auto import tqdm
 import wandb
 import imageio
 import fire
+from omegaconf import OmegaConf
+from loguru import logger
 
 from mmdit import MMDiT 
 
@@ -24,10 +26,10 @@ class RF:
 
         zt = x * t_all + z1 * (1 - t_all)
 
-        for t in range(1, time_steps + 1):
+        for t in range(0, time_steps):
             # TODO: add cfg
-            t_all_ = t_all[t-1].squeeze()
-            vt = self.model(zt[t-1], t_all_, y, y0)
+            t_all_ = t_all[t].squeeze()
+            vt = self.model(zt[t], t_all_, y, y0)
             
             loss += F.mse_loss(vt, (x - z1))
             
@@ -35,23 +37,27 @@ class RF:
     
     
     @torch.no_grad()
-    def simple_euler(self, x, y, y0, steps=25):
-        b = x.size(0)
+    def simple_euler(self, z, y, y0, steps=25):
+        b = z.size(0)
 
         images_per_label = [[] for _ in range(b)]
 
-        for t in tqdm(range(1, steps + 1), desc='Sampling Steps'):
-            t_tensor = torch.full((b,), t, device=x.device) / steps
+        dt = 1.0 / steps
+        dt = torch.tensor([dt] * b, device=z.device, requires_grad=False)
+        dt = dt.view(b, 1, 1, 1)
+        
+        for i in tqdm(range(0, steps), desc='Sampling Steps'):
+            t = torch.tensor([i/steps] * b, device=z.device, requires_grad=False)
+            
+            vc = self.model(z, t, y, y0)
+            
+            z = z + dt*vc
 
-            vt = self.model(x, t_tensor, y, y0)
-            # TODO: add cfg
-            x = x + vt
-
-            x_denorm = (x * 0.5) + 0.5
-            x_denorm = torch.clamp(x_denorm, 0, 1)
+            z_denorm = (z * 0.5) + 0.5
+            z_denorm = torch.clamp(z_denorm, 0, 1)
 
             for idx in range(b):
-                img = x_denorm[idx].cpu().numpy()
+                img = z_denorm[idx].cpu().numpy()
                 img = (img * 255).astype('uint8')
                 if img.shape[0] == 1:
                     img = img[0]
@@ -62,28 +68,17 @@ class RF:
         return images_per_label
 
 
-def train(
-    batch_size=64,
-    epochs=50,
-    lr=5e-4,
-    timesteps=25,
-    device='cuda',
-    save_model=True,
-    wandb_offline=False,
-    dataset_fraction=0.2,
-    download=True,
-    **kwargs
-):
-    print(locals())
+def train(config_path='configs/default.yaml', **kwargs):
+    config = OmegaConf.load(config_path)
+    logger.info('Train init', config)
 
     # Initialize Weights & Biases
-    if not wandb_offline:
-        wandb.init(project='reflow-mnist', config=locals())
-    else:
-        wandb.init(project='reflow-mnist', config=locals(), mode='offline')
+    mode = 'online' if not config.training.wandb_offline else 'offline'
+    wandb.init(project=f"{config.training.project_name}-{config.training.dataset}", 
+              config=OmegaConf.to_container(config, resolve=True), 
+              mode=mode)
 
-    device = torch.device(device if torch.cuda.is_available() else 'cpu')
-
+    device = torch.device(config.training.device if torch.cuda.is_available() else 'cpu')
     artifact_dir = wandb.run.dir if wandb.run else './artifacts'
     os.makedirs(artifact_dir, exist_ok=True)
     
@@ -93,116 +88,109 @@ def train(
         transforms.Normalize((0.5,), (0.5,)),
     ])
 
-    # Load the MNIST dataset
-    dataset = datasets.MNIST(root='./datasets', train=True, transform=transform, download=download)
+    # Load the dataset
+    dataset = datasets.MNIST(root='./datasets', train=True, transform=transform, download=True)
 
-    if dataset_fraction < 1.0:
-        subset_len = int(len(dataset) * dataset_fraction)
+    if config.training.dataset_fraction < 1.0:
+        subset_len = int(len(dataset) * config.training.dataset_fraction)
         dataset = torch.utils.data.Subset(dataset, range(subset_len))
 
-
-    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(
+        dataset, 
+        batch_size=config.training.batch_size, 
+        shuffle=True, 
+        num_workers=4, 
+        pin_memory=True
+    )
 
     # Initialize the model and move it to the device
-    model = MMDiT(**kwargs).to(device)
+    model = MMDiT(**config.model).to(device)
     model.train()
     
     rf = RF(model)
 
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = getattr(optim, config.training.get('optimizer', 'Adam'))(
+        model.parameters(), 
+        lr=config.training.lr
+    )
 
-    for epoch in tqdm(range(1, epochs + 1), desc='Epochs'):
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}")
+    for epoch in tqdm(range(1, config.training.epochs + 1), desc='Epochs'):
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{config.training.epochs}")
 
         for batch_idx, (x, y) in enumerate(progress_bar):
             x = x.to(device)  
             y = y.to(device)  
 
-            # One-hot encode the labels
-            y_onehot = F.one_hot(y, num_classes=10).float()
+            y_onehot = F.one_hot(y, num_classes=config.model.num_classes).float()
             optimizer.zero_grad()
 
-            loss = rf.forward_pass(x, y_onehot, y_onehot.clone(), timesteps)
+            loss = rf.forward_pass(x, y_onehot, y_onehot.clone())
             
             loss.backward()
             optimizer.step()
 
-            # Update progress bar and log metrics
             progress_bar.set_postfix({'loss': loss.item()})
-
             wandb.log({'loss': loss.item(), 'epoch': epoch})
 
-        # print(f'Epoch {epoch} Loss: {loss.item():.4f}')
-
-        # Save model checkpoint every 5 epochs
-        if save_model and epoch % 5 == 0:
+        if config.training.save_model and epoch % 5 == 0:
             checkpoint_path = os.path.join(artifact_dir, f'model_epoch_{epoch}.pth')
             torch.save(model.state_dict(), checkpoint_path)
-            print(f"Saved checkpoint: {checkpoint_path}")
+            logger.info(f"Saved checkpoint: {checkpoint_path}")
 
-    # Save the final model
-    if save_model:
+    if config.training.save_model:
         final_model_path = os.path.join(artifact_dir, 'model_final.pth')
         torch.save(model.state_dict(), final_model_path)
-        print(f"Saved final model: {final_model_path}")
-
+        logger.info(f"Saved final model: {final_model_path}")
 
     wandb.finish()
 
 
 @torch.no_grad()
 def sample(
-    num_steps=25,
     sample_dir='./samples',
-    model_path=None,
-    device='cuda',
-    create_gifs=True,
     gif_dir='./gifs',
-    num_labels=10,
-    num_channels=1,
-    input_size=28,
-    **kwargs
+    num_steps=25,
+    model_path=None,
+    create_gifs=True,
+    config_path='configs/default.yaml',
 ):
+    config = OmegaConf.load(config_path)
 
-    device = torch.device(device if torch.cuda.is_available() else 'cpu')
+    num_classes = config.model.get('num_classes', 10)
+    
+    device = torch.device(config.training.device if torch.cuda.is_available() else 'cpu')
     
     os.makedirs(sample_dir, exist_ok=True)
     if create_gifs:
         os.makedirs(gif_dir, exist_ok=True)
 
-
-    # Initialize the model and load weights
-    model = MMDiT(num_channels=num_channels, input_size=input_size, **kwargs).to(device)
+    model = MMDiT(**config.model).to(device)
     if model_path is None:
         raise ValueError("Please provide the path to the trained model checkpoint.")
     
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
-    # Initialize a batch for all labels
-    x = torch.randn(num_labels, num_channels, input_size, input_size, device=device)
-    labels = torch.arange(num_labels, device=device)
-    y = F.one_hot(labels, num_classes=10).float()
+    x = torch.randn(num_classes, config.model.num_channels, 
+                   config.model.input_size, config.model.input_size, device=device)
+    labels = torch.arange(num_classes, device=device)
+    y = F.one_hot(labels, num_classes=num_classes).float()
 
     rf = RF(model)
-    
     images_per_label = rf.simple_euler(x, y, y.clone(), steps=num_steps)
 
-    # Save the final images
-    for idx in range(num_labels):
+    for idx in range(num_classes):
         save_path = os.path.join(sample_dir, f'label_{idx}.png')
         imageio.imwrite(save_path, images_per_label[idx][-1])
-        print(f"Saved sample for label {idx} at {save_path}")
+        logger.info(f"Saved sample for label {idx} at {save_path}")
 
-    # Create and save GIFs
     if create_gifs:
-        for idx in range(num_labels):
+        for idx in range(num_classes):
             gif_path = os.path.join(gif_dir, f'label_{idx}.gif')
             imageio.mimsave(gif_path, images_per_label[idx], fps=5)
-            print(f"Saved GIF for label {idx} at {gif_path}")
+            logger.info(f"Saved GIF for label {idx} at {gif_path}")
 
-    print("Sampling complete.")
-
+    logger.info("Sampling complete.")
 
 if __name__ == '__main__':
     fire.Fire({

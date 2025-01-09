@@ -1,0 +1,29 @@
+name:
+  default config ddp for mnist
+
+training:
+  batch_size: 512
+  epochs: 250
+  lr: 1.0e-3
+  timesteps: 25
+  device: cuda
+  save_model: true
+  wandb_offline: false
+  dataset_fraction: 0.25
+  project_name: reflow
+  dataset: mnist
+  optimizer: Adam
+
+model:
+  hidden_dim: 64
+  depth: 6
+  num_heads: 4
+  qkv_bias: false
+  patch_size: 2
+  num_channels: 1
+  input_size: 28
+  num_classes: 10
+
+distributed:
+  enabled: true
+  world_size: 2

@@ -12,53 +12,35 @@ from tqdm.auto import tqdm
 import wandb
 import fire
 from loguru import logger
+from omegaconf import OmegaConf
 
 from mmdit import MMDiT 
 from rf import RF
 
 class Trainer:
-    def __init__(
-        self,
-        model,
-        optimizer,
-        batch_size=64,
-        epochs=50,
-        lr=1e-3,
-        timesteps=25,
-        device='cuda',
-        save_model=True,
-        wandb_offline=False,
-        dataset_fraction=0.2,
-        project_name='reflow',
-        dataset='mnist',
-        **kwargs
-    ):
+    def __init__(self, model, config):
         self.model = model
-        self.optimizer = optimizer(self.model.parameters(), lr=lr)
+        self.config = config
+        self.optimizer = getattr(optim, config.training.get('optimizer', 'Adam'))
         
-        self.batch_size = batch_size
-        self.epochs = epochs
-        self.timesteps = timesteps
-        self.device = device
-        self.save_model = save_model
-        self.wandb_offline = wandb_offline
-        self.dataset_fraction = dataset_fraction
-        self.project_name = f'{project_name}-{dataset}'
-        self.dataset = dataset
+        self.batch_size = config.training.batch_size
+        self.epochs = config.training.epochs
+        self.timesteps = config.training.timesteps
+        self.device = config.training.device
+        self.save_model = config.training.save_model
+        self.wandb_offline = config.training.wandb_offline
+        self.dataset_fraction = config.training.dataset_fraction
+        self.project_name = f"{config.training.project_name}-{config.training.dataset}"
+        self.dataset = config.training.dataset
         
-        from torch.optim.lr_scheduler import CosineAnnealingLR
-        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
-
-        config = {'batch_size': batch_size, 'epochs': epochs, 'lr': lr, 'timesteps': timesteps, 'dataset_fraction': dataset_fraction, **kwargs}
+        self.optimizer = self.optimizer(self.model.parameters(), lr=config.training.lr)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
 
         self.rf = RF(model)
-        
-        self.config = config  # Store config for later wandb init
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device(self.device if torch.cuda.is_available() else 'cpu')
         
         self.artifact_dir = './artifacts'  # Default artifact directory
         os.makedirs(self.artifact_dir, exist_ok=True)
-
         self.train_loader = None
 
     def _init_wandb(self, rank=None):
@@ -68,9 +50,20 @@ class Trainer:
         if rank is not None and rank != 0:
             wandb.init(mode='disabled')
         else:
+            config = OmegaConf.to_container(self.config, resolve=True)
+            
+            # convert to wandb friendly format
+            cfg = {}
+            for k, v in config.items():
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        cfg[f'{k}.{kk}'] = vv
+                else:
+                    cfg[k] = v
+            
             mode = 'online' if not self.wandb_offline else 'offline'
-            logger.info('Train init', self.config)
-            wandb.init(project=self.project_name, config=self.config, mode=mode)
+            logger.info('Train init', cfg)
+            wandb.init(project=self.project_name, config=cfg, mode=mode)
             self.artifact_dir = wandb.run.dir
             os.makedirs(self.artifact_dir, exist_ok=True)
 
@@ -216,33 +209,27 @@ class Trainer:
             logger.info("Training complete!")
 
 
-def run_ddp(rank, world_size, kwargs):
-    # will be called multiple times in spawn
-    model = MMDiT(**kwargs)
-    trainer = Trainer(
-        model=model,
-        optimizer=optim.AdamW,
-        **kwargs
-    )
+def run_ddp(rank, world_size, config):
+    model = MMDiT(**config.model)
+    trainer = Trainer(model=model, config=config)
     trainer.ddp_setup(rank, world_size)
     trainer.train(ddp=True, rank=rank, world_size=world_size)
     dist.destroy_process_group()
 
 
-def train(ddp: bool = False, world_size: int = 2, **kwargs):
-    # no ddp even if device is 'cuda:0'
-    if not ddp or not torch.cuda.is_available() or torch.cuda.device_count() < 2 or world_size < 2 or kwargs.get('device', 'cuda') != 'cuda':
+def train(config_path='configs/default.yaml'):
+    config = OmegaConf.load(config_path)
+
+    ddp = config.distributed.enabled
+    world_size = config.distributed.world_size
+
+    if not ddp or not torch.cuda.is_available() or torch.cuda.device_count() < 2 or world_size < 2 or config.training.device != 'cuda':
         logger.info("Training in non-DDP mode")
-        model = MMDiT(**kwargs)
-        trainer = Trainer(
-            model=model,
-            optimizer=optim.Adam,
-            **kwargs
-        )
+        model = MMDiT(**config.model)
+        trainer = Trainer(model=model, config=config)
         trainer.train()
     else:
-        mp.spawn(run_ddp, args=(world_size, kwargs), nprocs=world_size)
-
+        mp.spawn(run_ddp, args=(world_size, config), nprocs=world_size)
 
 if __name__ == '__main__':
     fire.Fire(train)

@@ -217,28 +217,27 @@ class FinalLayer(nn.Module):
 class MMDiT(nn.Module):
     def __init__(
         self,
-        input_size=28,
-        hidden_size: int = 64,
-        num_classes=10,
-        depth: int = 6,
-        num_heads: int = 4,
-        qkv_bias: bool = False,
-        patch_size=4,
+        input_size,
+        num_classes,
+        hidden_dim=64,
+        depth=6,
+        num_heads=4,
+        qkv_bias=False,
+        patch_size=2,
         num_channels=1,
-        **kwargs
     ):
         super().__init__()
         self.num_channels = num_channels
         self.patch_size = patch_size
-        self.x_embedder = PatchEmbedder(num_channels, input_size, hidden_size, patch_size)
-        self.t_embedder = TimestepEmbedder(hidden_size)
-        self.y_embedder = VectorEmbedder(num_classes, hidden_size)        
-        self.context_embedder = VectorEmbedder(num_classes, hidden_size)
+        self.x_embedder = PatchEmbedder(num_channels, input_size, hidden_dim, patch_size)
+        self.t_embedder = TimestepEmbedder(hidden_dim)
+        self.y_embedder = VectorEmbedder(num_classes, hidden_dim)        
+        self.context_embedder = VectorEmbedder(num_classes, hidden_dim)
         
         self.joint_blocks = nn.ModuleList(
-            [JointBlock(hidden_size, num_heads, qkv_bias) for i in range(depth)]
+            [JointBlock(hidden_dim, num_heads, qkv_bias) for i in range(depth)]
         )
-        self.final_layer = FinalLayer(hidden_size, patch_size, num_channels)
+        self.final_layer = FinalLayer(hidden_dim, patch_size, num_channels)
         logger.info(f"Initialized MMDiT with {self.get_num_params()} parameters")
         
     def forward_core_with_concat(self, x, c_mod, context):
