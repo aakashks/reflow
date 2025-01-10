@@ -25,7 +25,6 @@ class Trainer:
         
         self.batch_size = config.training.batch_size
         self.epochs = config.training.epochs
-        self.timesteps = config.training.timesteps
         self.device = config.training.device
         self.save_model = config.training.save_model
         self.wandb_offline = config.training.wandb_offline
@@ -133,7 +132,7 @@ class Trainer:
         y_onehot = F.one_hot(y, num_classes=10).float()
         self.optimizer.zero_grad()
 
-        loss = self.rf.forward_pass(x, y_onehot, y_onehot.clone(), self.timesteps)
+        loss = self.rf.forward_pass(x, y_onehot, y_onehot.clone())
         loss.backward()
         self.optimizer.step()
 

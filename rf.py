@@ -17,23 +17,19 @@ class RF:
     def __init__(self, model):
         self.model = model
         
-    def forward_pass(self, x, y, y0, time_steps):
-        loss = 0.0
+    def forward_pass(self, x, y, y0):
+        b = x.size(0)
+        
         z1 = torch.randn_like(x, device=x.device, requires_grad=False)
-        t_all = torch.rand(time_steps, x.size(0), device=x.device, requires_grad=False)    
-        # make it suitable for broadcasting
-        t_all = t_all.view(time_steps, x.size(0), 1, 1, 1)
-
-        zt = x * t_all + z1 * (1 - t_all)
-
-        for t in range(0, time_steps):
-            # TODO: add cfg
-            t_all_ = t_all[t].squeeze()
-            vt = self.model(zt[t], t_all_, y, y0)
+        t = torch.rand(b, device=x.device, requires_grad=False)
+        t_br = t.view(b, 1, 1, 1)
+        
+        zt = x * t_br + z1 * (1 - t_br)
+        vt = self.model(zt, t, y, y0)
             
-            loss += F.mse_loss(vt, (x - z1))
-            
-        return loss / time_steps
+        loss = F.mse_loss(vt, (x - z1))
+        
+        return loss
     
     
     @torch.no_grad()
