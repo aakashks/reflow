@@ -211,11 +211,15 @@ class Trainer:
 
 
 def run_ddp(rank, world_size, config):
-    model = MMDiT(**config.model)
-    trainer = Trainer(model=model, config=config)
-    trainer.ddp_setup(rank, world_size)
-    trainer.train(ddp=True, rank=rank, world_size=world_size)
-    dist.destroy_process_group()
+    try:
+        model = MMDiT(**config.model)
+        trainer = Trainer(model=model, config=config)
+        trainer.ddp_setup(rank, world_size)
+        trainer.train(ddp=True, rank=rank, world_size=world_size)
+    except KeyboardInterrupt:
+        logger.info(f"Process {rank} received keyboard interrupt")
+    finally:
+        dist.destroy_process_group()
 
 
 def train(config_path='configs/default.yaml'):

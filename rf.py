@@ -23,6 +23,7 @@ class RF:
         t_all = torch.rand(time_steps, x.size(0), requires_grad=False)    
         if logit_sampling:
             t_all = torch.randn_like(t_all)
+            t_all = t_all * 20 - 10     # temporarily trying inverse logit sampling
             t_all = torch.sigmoid(t_all)
 
         # make it suitable for broadcasting
@@ -44,7 +45,7 @@ class RF:
     def simple_euler(self, z, y, y0, steps=25):
         b = z.size(0)
 
-        images_per_label = [[] for _ in range(b)]
+        images = []
 
         dt = 1.0 / steps
         dt = torch.tensor([dt] * b, device=z.device, requires_grad=False)
@@ -56,20 +57,9 @@ class RF:
             vc = self.model(z, t, y, y0)
             
             z = z + dt*vc
+            images.append(z.cpu())
 
-            z_denorm = (z * 0.5) + 0.5
-            z_denorm = torch.clamp(z_denorm, 0, 1)
-
-            for idx in range(b):
-                img = z_denorm[idx].cpu().numpy()
-                img = (img * 255).astype('uint8')
-                if img.shape[0] == 1:
-                    img = img[0]
-                else:
-                    img = img.transpose(1, 2, 0)
-                images_per_label[idx].append(img)
-
-        return images_per_label
+        return images
 
 
 def train(config_path='configs/default.yaml', **kwargs):
@@ -152,8 +142,8 @@ def train(config_path='configs/default.yaml', **kwargs):
 
 @torch.no_grad()
 def sample(
-    sample_dir='./samples',
-    gif_dir='./gifs',
+    sample_dir='./results',
+    gif_dir='./results',
     num_steps=25,
     model_path=None,
     create_gifs=True,
@@ -176,24 +166,39 @@ def sample(
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
-    x = torch.randn(num_classes, config.model.num_channels, 
+    x = torch.randn(16, config.model.num_channels, 
                    config.model.input_size, config.model.input_size, device=device)
-    labels = torch.arange(num_classes, device=device)
+    labels = torch.arange(0, 16, device=device) % num_classes
     y = F.one_hot(labels, num_classes=num_classes).float()
 
+
     rf = RF(model)
-    images_per_label = rf.simple_euler(x, y, y.clone(), steps=num_steps)
+    images_raw = rf.simple_euler(x, y, y.clone(), steps=num_steps)
+    
+    
+    images_raw = torch.stack(images_raw)
 
-    for idx in range(num_classes):
-        save_path = os.path.join(sample_dir, f'label_{idx}.png')
-        imageio.imwrite(save_path, images_per_label[idx][-1])
-        logger.info(f"Saved sample for label {idx} at {save_path}")
+    images_raw = images_raw * 0.5 + 0.5
+    images_raw = torch.clamp(images_raw, 0, 1)
 
+    # Save the last timestep image
+    last_images = images_raw[-1]
+    grid_img = utils.make_grid(last_images, nrow=4)
+    save_path = os.path.join(sample_dir, 'grid.png')
+    utils.save_image(grid_img, save_path)
+    logger.info(f"Saved last timestep image at {save_path}")
+
+    # Save the gif
     if create_gifs:
-        for idx in range(num_classes):
-            gif_path = os.path.join(gif_dir, f'label_{idx}.gif')
-            imageio.mimsave(gif_path, images_per_label[idx], fps=5)
-            logger.info(f"Saved GIF for label {idx} at {gif_path}")
+        gif_images = []
+        for t in range(images_raw.size(0)):
+            grid_img = utils.make_grid(images_raw[t], nrow=4)
+            grid_img = (grid_img * 255).byte().permute(1, 2, 0).numpy()
+            gif_images.append(grid_img)
+        
+        gif_path = os.path.join(gif_dir, 'grid.gif')
+        imageio.mimsave(gif_path, gif_images, fps=5)
+        logger.info(f"Saved GIF at {gif_path}")
 
     logger.info("Sampling complete.")
 
