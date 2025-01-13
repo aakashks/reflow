@@ -17,12 +17,16 @@ class RF:
     def __init__(self, model):
         self.model = model
         
-    def forward_pass(self, x, y, y0, time_steps):
+    def forward_pass(self, x, y, y0, time_steps, logit_sampling=False):
         loss = 0.0
         z1 = torch.randn_like(x, device=x.device, requires_grad=False)
-        t_all = torch.rand(time_steps, x.size(0), device=x.device, requires_grad=False)    
+        t_all = torch.rand(time_steps, x.size(0), requires_grad=False)    
+        if logit_sampling:
+            t_all = torch.randn_like(t_all)
+            t_all = torch.sigmoid(t_all)
+
         # make it suitable for broadcasting
-        t_all = t_all.view(time_steps, x.size(0), 1, 1, 1)
+        t_all = t_all.view(time_steps, x.size(0), 1, 1, 1).to(x.device)
 
         zt = x * t_all + z1 * (1 - t_all)
 
@@ -124,7 +128,8 @@ def train(config_path='configs/default.yaml', **kwargs):
             y_onehot = F.one_hot(y, num_classes=config.model.num_classes).float()
             optimizer.zero_grad()
 
-            loss = rf.forward_pass(x, y_onehot, y_onehot.clone())
+            loss = rf.forward_pass(x, y_onehot, y_onehot.clone(), 
+                                   config.training.get('timesteps', 25), logit_sampling=config.training.get('logit_sampling', False))
             
             loss.backward()
             optimizer.step()

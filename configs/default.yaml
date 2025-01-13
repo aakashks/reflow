@@ -6,6 +6,7 @@ training:
   epochs: 50
   lr: 1.0e-3
   timesteps: 25
+  logit_sampling: true
   device: cuda
   save_model: true
   wandb_offline: false
