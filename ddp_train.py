@@ -218,6 +218,8 @@ def run_ddp(rank, world_size, config):
         trainer.train(ddp=True, rank=rank, world_size=world_size)
     except KeyboardInterrupt:
         logger.info(f"Process {rank} received keyboard interrupt")
+    except Exception as e:
+        logger.exception(f"Process {rank} failed with exception: {e}")
     finally:
         dist.destroy_process_group()
 

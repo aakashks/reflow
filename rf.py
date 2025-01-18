@@ -21,42 +21,45 @@ class RF:
         loss = 0.0
         z1 = torch.randn_like(x, device=x.device, requires_grad=False)
         t_all = torch.rand(time_steps, x.size(0), requires_grad=False)    
-        if logit_sampling:
-            t_all = torch.randn_like(t_all)
-            t_all = t_all * 20 - 10     # temporarily trying inverse logit sampling
-            t_all = torch.sigmoid(t_all)
+        # if logit_sampling:
+        #     t_all = torch.randn_like(t_all)
+        #     t_all = torch.sigmoid(t_all)
 
         # make it suitable for broadcasting
         t_all = t_all.view(time_steps, x.size(0), 1, 1, 1).to(x.device)
 
-        zt = x * t_all + z1 * (1 - t_all)
+        zt = x * (1 - t_all) + z1 * t_all
 
         for t in range(0, time_steps):
-            # TODO: add cfg
             t_all_ = t_all[t].squeeze()
             vt = self.model(zt[t], t_all_, y, y0)
             
-            loss += F.mse_loss(vt, (x - z1))
+            loss += F.mse_loss(vt, (z1 - x))
             
         return loss / time_steps
     
     
+    
     @torch.no_grad()
-    def simple_euler(self, z, y, y0, steps=25):
+    def simple_euler(self, z, cond, null_cond=None, cfg=2.0, steps=25):
         b = z.size(0)
 
         images = []
 
         dt = 1.0 / steps
-        dt = torch.tensor([dt] * b, device=z.device, requires_grad=False)
+        dt = torch.full((b,), dt, device=z.device)
         dt = dt.view(b, 1, 1, 1)
         
-        for i in tqdm(range(0, steps), desc='Sampling Steps'):
-            t = torch.tensor([i/steps] * b, device=z.device, requires_grad=False)
+        for i in tqdm(range(steps-1, 0, -1), desc='Sampling Steps'):
+            t = torch.full((b,), i / steps, device=z.device)
             
-            vc = self.model(z, t, y, y0)
+            vc = self.model(z, t, cond, cond.clone())
             
-            z = z + dt*vc
+            # if null_cond is not None:
+            #     vu = self.model(z, t, null_cond, null_cond.clone())
+            #     vc = (1 + cfg) * vc - cfg * vu
+            
+            z = z - dt*vc
             images.append(z.cpu())
 
         return images
@@ -140,11 +143,13 @@ def train(config_path='configs/default.yaml', **kwargs):
     wandb.finish()
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def sample(
     sample_dir='./results',
     gif_dir='./results',
-    num_steps=25,
+    num_steps=None,
+    null_cond=True,
+    cfg=2.0,
     model_path=None,
     create_gifs=True,
     config_path='configs/default.yaml',
@@ -154,6 +159,8 @@ def sample(
     num_classes = config.model.get('num_classes', 10)
     
     device = torch.device(config.training.device if torch.cuda.is_available() else 'cpu')
+    
+    num_steps = num_steps or config.training.get('timesteps', 25)
     
     os.makedirs(sample_dir, exist_ok=True)
     if create_gifs:
@@ -169,11 +176,11 @@ def sample(
     x = torch.randn(16, config.model.num_channels, 
                    config.model.input_size, config.model.input_size, device=device)
     labels = torch.arange(0, 16, device=device) % num_classes
-    y = F.one_hot(labels, num_classes=num_classes).float()
-
+    cond = F.one_hot(labels, num_classes=num_classes).float()
+    null_cond = torch.zeros_like(cond) if null_cond else None
 
     rf = RF(model)
-    images_raw = rf.simple_euler(x, y, y.clone(), steps=num_steps)
+    images_raw = rf.simple_euler(x, cond, None, cfg=cfg, steps=num_steps)
     
     
     images_raw = torch.stack(images_raw)
