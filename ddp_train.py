@@ -230,7 +230,7 @@ def run_ddp(rank, world_size, config):
         dist.destroy_process_group()
 
 
-def train(config_path='configs/default.yaml'):
+def train(config_path='configs/mnist.yaml'):
     config = OmegaConf.load(config_path)
 
     ddp = config.distributed.enabled
