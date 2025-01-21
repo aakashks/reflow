@@ -15,7 +15,7 @@ from loguru import logger
 from omegaconf import OmegaConf
 
 from mmdit import MMDiT 
-from rf import RF
+from rf import RF, sample
 
 class Trainer:
     def __init__(self, model, config):
@@ -33,6 +33,7 @@ class Trainer:
         self.dataset_fraction = config.training.dataset_fraction
         self.project_name = f"{config.training.project_name}-{config.training.dataset}"
         self.dataset = config.training.dataset
+        self.sample_examples = config.training.get('sample_examples', True)
         
         self.optimizer = self.optimizer(self.model.parameters(), lr=config.training.lr)
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
@@ -118,8 +119,8 @@ class Trainer:
 
         return train_loader
     
-    def _save_checkpoint(self, model, ckpt_name='model_final.pth'):
-        # only on rank 0 process do these things
+    def _save_checkpoint(self, model, ckpt_name='model_final.pth'):        
+        # only on rank 0 process
         if dist.is_initialized() and dist.get_rank() != 0:
             return
         
@@ -141,11 +142,17 @@ class Trainer:
         return loss.item()
     
     def _post_training(self):
+        # only on rank 0 process do these things
+        if dist.is_initialized() and dist.get_rank() != 0:
+            return
+        
         if self.save_model:
             self._save_checkpoint(self.model, ckpt_name='model_final.pth')
+            
+        if self.sample_examples:
+            sample(model=self.model, config=self.config, sample_dir=self.artifact_dir)
 
-        if not dist.is_initialized() or dist.get_rank() == 0:
-            wandb.finish()
+        wandb.finish()
             
     def _pre_training(self, ddp, rank, world_size):
         if not ddp:
