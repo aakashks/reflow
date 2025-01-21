@@ -49,7 +49,11 @@ def sample(
     x = torch.randn(16, config.model.num_channels, 
                    config.model.input_size, config.model.input_size, device=device)
     cond = torch.arange(0, 16, device=device) % num_classes
-    null_cond = torch.full_like(cond, num_classes) if null_cond else None
+    
+    if null_cond and config.training.get('cfg_dropout_prob', 0) > 0:
+        null_cond = torch.full_like(cond, num_classes)
+    else:
+        null_cond = None
 
     rf = RectifiedFlow(model)
     images_raw = rf.simple_euler(x, cond, null_cond, cfg=cfg, steps=num_steps)

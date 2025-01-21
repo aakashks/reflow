@@ -120,10 +120,6 @@ class Trainer:
         return train_loader
     
     def _save_checkpoint(self, model, ckpt_name='model_final.pth'):        
-        # only on rank 0 process
-        if dist.is_initialized() and dist.get_rank() != 0:
-            return
-        
         checkpoint_path = os.path.join(self.artifact_dir, ckpt_name)
         torch.save(model.module.state_dict() if dist.is_initialized() else model.state_dict(), checkpoint_path)
         logger.info(f"Saved checkpoint: {checkpoint_path}")
@@ -207,7 +203,7 @@ class Trainer:
 
             self.scheduler.step()
             
-            if epoch % 50 == 0:
+            if epoch % 50 == 0 and not (dist.is_initialized() and dist.get_rank() != 0):
                 if self.save_model:
                     self._save_checkpoint(self.model, ckpt_name=f'model_epoch_{epoch}.pth')
                 if self.sample_examples:
