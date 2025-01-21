@@ -2,17 +2,17 @@ name:
   default config ddp for mnist
 
 training:
-  batch_size: 1024
-  epochs: 500
+  batch_size: 256
+  epochs: 100
   lr: 1e-3
-  logit_sampling: false
+  logit_sampling: true
   device: cuda
   save_model: true
   wandb_offline: false
   dataset_fraction: 0.2
   project_name: reflow1
   dataset: cifar10  # mnist, cifar10
-  optimizer: Adam
+  optimizer: AdamW
 
 model:
   hidden_dim: 128
@@ -26,5 +26,5 @@ model:
   cfg_dropout_prob: 0.2
 
 distributed:
-  enabled: false
-  world_size: 1
+  enabled: true
+  world_size: 2

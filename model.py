@@ -55,16 +55,16 @@ class LabelEmbedder(nn.Module):
     def __init__(self, num_classes, hidden_size, dropout_prob=0.2):
         super().__init__()
         self.dropout_prob = dropout_prob
-        self.num_classes = num_classes + int(dropout_prob > 0)
+        self.num_classes = num_classes
         self.use_dropout = dropout_prob > 0
-        self.embed = nn.Embedding(self.num_classes, hidden_size)
+        self.embed = nn.Embedding(self.num_classes + int(self.use_dropout), hidden_size)
     
     def forward(self, labels):
         labels = labels.to(torch.int32)
         
         if self.training and self.use_dropout:
             drop_ids = torch.bernoulli(labels, self.dropout_prob).bool()
-            labels = torch.where(drop_ids, self.num_classes-1, labels)
+            labels = torch.where(drop_ids, self.num_classes, labels)
         
         return self.embed(labels)
 
