@@ -46,9 +46,9 @@ def sample(
         model.to(device)
     model.eval()
 
-    x = torch.randn(16, config.model.num_channels, 
+    x = torch.randn(25, config.model.num_channels, 
                    config.model.input_size, config.model.input_size, device=device)
-    cond = torch.arange(0, 16, device=device) % num_classes
+    cond = torch.arange(0, 25, device=device) % num_classes
     
     if null_cond and config.training.get('cfg_dropout_prob', 0) > 0:
         null_cond = torch.full_like(cond, num_classes)
@@ -65,7 +65,7 @@ def sample(
 
     # Save the last timestep image
     last_images = images_raw[-1]
-    grid_img = utils.make_grid(last_images, nrow=4)
+    grid_img = utils.make_grid(last_images, nrow=5)
     save_path = os.path.join(save_dir, f'{save_name}.png')
     utils.save_image(grid_img, save_path)
     logger.info(f"Saved last timestep image at {save_path}")
@@ -73,7 +73,7 @@ def sample(
     # Save the gif
     gif_images = []
     for t in range(images_raw.size(0)):
-        grid_img = utils.make_grid(images_raw[t], nrow=4)
+        grid_img = utils.make_grid(images_raw[t], nrow=5)
         grid_img = (grid_img * 255).byte().permute(1, 2, 0).numpy()
         gif_images.append(grid_img)
     
