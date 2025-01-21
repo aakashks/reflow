@@ -24,7 +24,8 @@ def sample(
     model=None,
     model_path=None,
     config=None,
-    config_path='configs/default.yaml',
+    save_name='grid',
+    config_path='configs/mnist.yaml',
 ):
     config = OmegaConf.load(config_path) if config is None else config
 
@@ -61,7 +62,7 @@ def sample(
     # Save the last timestep image
     last_images = images_raw[-1]
     grid_img = utils.make_grid(last_images, nrow=4)
-    save_path = os.path.join(save_dir, 'grid.png')
+    save_path = os.path.join(save_dir, f'{save_name}.png')
     utils.save_image(grid_img, save_path)
     logger.info(f"Saved last timestep image at {save_path}")
 
@@ -72,7 +73,7 @@ def sample(
         grid_img = (grid_img * 255).byte().permute(1, 2, 0).numpy()
         gif_images.append(grid_img)
     
-    gif_path = os.path.join(save_dir, 'grid.gif')
+    gif_path = os.path.join(save_dir, f'{save_name}.gif')
     imageio.mimsave(gif_path, gif_images, fps=5)
     logger.info(f"Saved GIF at {gif_path}")
 

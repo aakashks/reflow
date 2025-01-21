@@ -140,8 +140,6 @@ class SelfAttention(nn.Module):
         # x is b n c
         qkv = self.qkv(x) # b n 3d
         q, k, v = split_qkv(qkv, self.head_dim)
-        # q = rearrange(self.ln_q(q), 'b n h d -> b n (h d)')
-        # k = rearrange(self.ln_k(k), 'b n h d -> b n (h d)')
         q = self.ln_q(q)
         k = self.ln_k(k)
         return q, k, v
@@ -307,3 +305,12 @@ class DiT(nn.Module):
 
         x = self.final_layer(x, adaln_context)
         return self.unpatchify(x)
+
+if __name__ == '__main__':
+    model = DiT(input_size=28, num_classes=10, num_channels=1, cfg_dropot_prob=0)    
+    x = torch.rand(3, 1, 28, 28)
+    y = torch.randint(0, 9, (3,))
+    t = torch.rand(3)
+
+    out = model(x, t, y)
+    print(out.shape)

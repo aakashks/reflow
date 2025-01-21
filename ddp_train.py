@@ -134,7 +134,7 @@ class Trainer:
 
         self.optimizer.zero_grad()
 
-        loss = self.rf.forward_pass(x, y)
+        loss = self.rf.forward_pass(x, y, self.logit_sampling)
         loss.backward()
         self.optimizer.step()
 
@@ -149,7 +149,7 @@ class Trainer:
             self._save_checkpoint(self.model, ckpt_name='model_final.pth')
             
         if self.sample_examples:
-            sample(model=self.model, config=self.config, save_dir=self.artifact_dir)
+            sample(model=self.model, config=self.config, save_dir=self.artifact_dir, save_name='final')
 
         wandb.finish()
             
@@ -207,8 +207,13 @@ class Trainer:
 
             self.scheduler.step()
             
-            if self.save_model and epoch % 50 == 0:
-                self._save_checkpoint(self.model, ckpt_name=f'model_epoch_{epoch}.pth')
+            if epoch % 50 == 0:
+                if self.save_model:
+                    self._save_checkpoint(self.model, ckpt_name=f'model_epoch_{epoch}.pth')
+                if self.sample_examples:
+                    sample(model=self.model, config=self.config, save_dir=self.artifact_dir, save_name=f'epoch_{epoch}')
+                
+                self.model.train()
             
         self._post_training()
         
