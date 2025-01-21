@@ -14,8 +14,9 @@ import fire
 from loguru import logger
 from omegaconf import OmegaConf
 
-from mmdit import MMDiT 
-from rf import RF, sample
+from model import DiT
+from rectified_flow import RectifiedFlow
+from sampling import sample
 
 class Trainer:
     def __init__(self, model, config):
@@ -25,7 +26,6 @@ class Trainer:
         
         self.batch_size = config.training.batch_size
         self.epochs = config.training.epochs
-        self.timesteps = config.training.get('timesteps', 25)
         self.logit_sampling = config.training.get('logit_sampling', False)
         self.device = config.training.device
         self.save_model = config.training.save_model
@@ -38,7 +38,7 @@ class Trainer:
         self.optimizer = self.optimizer(self.model.parameters(), lr=config.training.lr)
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
 
-        self.rf = RF(model)
+        self.rf = RectifiedFlow(self.model)
         self.device = torch.device(self.device if torch.cuda.is_available() else 'cpu')
         
         self.artifact_dir = './artifacts'  # Default artifact directory
@@ -132,10 +132,9 @@ class Trainer:
         x = x.to(self.device)  
         y = y.to(self.device)  
 
-        y_onehot = F.one_hot(y, num_classes=10).float()
         self.optimizer.zero_grad()
 
-        loss = self.rf.forward_pass(x, y_onehot, y_onehot.clone(), self.timesteps, logit_sampling=self.logit_sampling)
+        loss = self.rf.forward_pass(x, y)
         loss.backward()
         self.optimizer.step()
 
@@ -150,7 +149,7 @@ class Trainer:
             self._save_checkpoint(self.model, ckpt_name='model_final.pth')
             
         if self.sample_examples:
-            sample(model=self.model, config=self.config, sample_dir=self.artifact_dir)
+            sample(model=self.model, config=self.config, save_dir=self.artifact_dir)
 
         wandb.finish()
             
@@ -208,7 +207,7 @@ class Trainer:
 
             self.scheduler.step()
             
-            if self.save_model and epoch % 5 == 0:
+            if self.save_model and epoch % 50 == 0:
                 self._save_checkpoint(self.model, ckpt_name=f'model_epoch_{epoch}.pth')
             
         self._post_training()
@@ -219,7 +218,7 @@ class Trainer:
 
 def run_ddp(rank, world_size, config):
     try:
-        model = MMDiT(**config.model)
+        model = DiT(**config.model)
         trainer = Trainer(model=model, config=config)
         trainer.ddp_setup(rank, world_size)
         trainer.train(ddp=True, rank=rank, world_size=world_size)
@@ -239,7 +238,7 @@ def train(config_path='configs/default.yaml'):
 
     if not ddp or not torch.cuda.is_available() or torch.cuda.device_count() < 2 or world_size < 2 or config.training.device != 'cuda':
         logger.info("Training in non-DDP mode")
-        model = MMDiT(**config.model)
+        model = DiT(**config.model)
         trainer = Trainer(model=model, config=config)
         trainer.train()
     else:
