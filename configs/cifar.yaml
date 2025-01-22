@@ -1,9 +1,9 @@
 name:
-  default config ddp for mnist
+  default config ddp for cifar
 
 training:
   batch_size: 256
-  epochs: 100
+  epochs: 500
   lr: 1e-3
   logit_sampling: true
   device: cuda
@@ -15,10 +15,10 @@ training:
   optimizer: AdamW
 
 model:
-  hidden_dim: 128
-  depth: 12
+  hidden_dim: 256
+  depth: 10
   num_heads: 8
-  qkv_bias: true
+  qkv_bias: false
   patch_size: 2
   num_channels: 3
   input_size: 32
